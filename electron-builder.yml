@@ -1,0 +1,37 @@
+appId: com.hungsilver.aicodingtool
+productName: AI Coding Tool
+directories:
+  output: release/${version}
+files:
+  - out/**/*
+  - resources/icon.ico
+  - package.json
+  - "!src/**"
+  - "!tests/**"
+  - "!scripts/**"
+  - "!.github/**"
+asar: true
+asarUnpack:
+  - "**/node_modules/@lydell/node-pty*/**"
+  - "**/node_modules/sql.js/dist/sql-wasm.wasm"
+extraResources:
+  - from: resources/icon.ico
+    to: icon.ico
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: resources/icon.ico
+  artifactName: AI-Coding-Tool-Setup-${version}.exe
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: AI Coding Tool
+publish:
+  provider: github
+  owner: Hungsilver
+  repo: ai-coding-tool

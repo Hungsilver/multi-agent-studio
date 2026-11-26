@@ -1,0 +1,153 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #0E1117;
+  --surface: #161B22;
+  --surface-elevated: #1C222B;
+  --header: #12161E;
+  --border: #272E3A;
+  --text: #E6EDF3;
+  --muted: #8B949E;
+  --sel: #1F2A3A;
+  --hover: #1D2430;
+  --accent: #6366F1;
+  --accent-hover: #4F46E5;
+  --accent-soft: rgba(99, 102, 241, 0.16);
+  --err: #F87171;
+  --err-bg: rgba(248, 113, 113, 0.12);
+  --warn: #FBBF24;
+  --ok: #34D399;
+  --info: #60A5FA;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+.app-drag {
+  -webkit-app-region: drag;
+}
+
+.app-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+.btn-ghost:hover {
+  background-color: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.bg-subtle {
+  background-color: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+/* Custom sleek scrollbars */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 32%, transparent);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted) 55%, transparent);
+}
+
+/* Markdown prose polish */
+.prose-ai {
+  font-size: 13.75px;
+  line-height: 1.65;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.prose-ai p {
+  margin: 0.45rem 0;
+}
+
+.prose-ai p:first-child {
+  margin-top: 0;
+}
+
+.prose-ai p:last-child {
+  margin-bottom: 0;
+}
+
+.prose-ai h1,
+.prose-ai h2,
+.prose-ai h3,
+.prose-ai h4 {
+  margin: 0.85rem 0 0.4rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.prose-ai h1 { font-size: 1.25rem; }
+.prose-ai h2 { font-size: 1.1rem; }
+.prose-ai h3 { font-size: 1rem; }
+
+.prose-ai ul,
+.prose-ai ol {
+  margin: 0.45rem 0;
+  padding-left: 1.35rem;
+}
+
+.prose-ai ul { list-style-type: disc; }
+.prose-ai ol { list-style-type: decimal; }
+
+.prose-ai li {
+  margin: 0.2rem 0;
+}
+
+.prose-ai blockquote {
+  margin: 0.6rem 0;
+  padding: 0.35rem 0.85rem;
+  border-left: 3px solid var(--accent);
+  background: var(--surface-elevated);
+  border-radius: 0 6px 6px 0;
+  color: var(--muted);
+}
+
+.prose-ai table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.65rem 0;
+  font-size: 12.5px;
+}
+
+.prose-ai th,
+.prose-ai td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.prose-ai th {
+  background: var(--surface-elevated);
+  font-weight: 600;
+}
+
+.prose-ai a {
+  color: var(--info);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
