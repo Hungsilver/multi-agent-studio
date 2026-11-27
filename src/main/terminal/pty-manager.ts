@@ -96,8 +96,8 @@ export class PtyManager extends EventEmitter {
           },
           kill: () => {
             try {
-              // Gửi lệnh exit trước trên ConPTY để tránh AttachConsole warning từ helper node-pty khi thoát app
-              pty.write('\r\nexit\r\n')
+              // Interrupt without submitting any command waiting at the prompt.
+              pty.write('\x03')
               setTimeout(() => {
                 try {
                   pty.kill()

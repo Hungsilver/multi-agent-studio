@@ -1,7 +1,9 @@
 import { create } from 'zustand'
+import type { ProviderId } from '@shared/types/ai'
 import type { PtySessionInfo } from '@shared/types/workspace'
 
 interface TerminalTab extends PtySessionInfo {
+  installProvider?: ProviderId
   buffer: string
   exited: boolean
 }
@@ -12,7 +14,7 @@ interface TerminalState {
 
   openShellTab: (cwd: string, title?: string) => Promise<PtySessionInfo>
   openInteractiveAiTab: (sessionId: string) => Promise<PtySessionInfo>
-  attachExistingPty: (info: PtySessionInfo) => void
+  attachExistingPty: (info: PtySessionInfo, installProvider?: ProviderId) => void
   setActivePty: (ptyId: string) => void
   closeTab: (ptyId: string) => Promise<void>
   appendData: (ptyId: string, data: string) => void
@@ -35,9 +37,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     return info
   },
 
-  attachExistingPty: (info) => {
+  attachExistingPty: (info, installProvider) => {
     set((s) => ({
-      tabs: [...s.tabs, { ...info, buffer: '', exited: false }],
+      tabs: [...s.tabs, { ...info, installProvider, buffer: '', exited: false }],
       activePtyId: info.id
     }))
   },

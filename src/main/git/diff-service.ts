@@ -19,7 +19,7 @@ function readTextSafe(fullPath: string): { content: string; isBinary: boolean } 
   return { content: buf.toString('utf8'), isBinary: false }
 }
 
-export async function getRepoSummary(dir: string): Promise<RepoSummary> {
+export async function getRepoSummary(dir: string, includeDetails = false): Promise<RepoSummary> {
   const root = await getRepoRoot(dir)
   if (!root) {
     return {
@@ -65,7 +65,7 @@ export async function getRepoSummary(dir: string): Promise<RepoSummary> {
   const statusRes = await runGit(root, ['status', '--porcelain'])
   const dirtyCount = statusRes.stdout.split(/\r?\n/).filter((l) => l.trim()).length
 
-  return {
+  const summary: RepoSummary = {
     isRepo: true,
     root,
     branch,
@@ -77,6 +77,37 @@ export async function getRepoSummary(dir: string): Promise<RepoSummary> {
     untrackedCount,
     dirtyCount
   }
+  if (includeDetails) {
+    const [head, upstreamRemote, incomingDiff] = await Promise.all([
+      runGit(root, ['log', '-1', '--format=%h%x00%s%x00%an%x00%aI', 'HEAD', '--']),
+      runGit(root, ['for-each-ref', '--format=%(upstream:remotename)', '--', `refs/heads/${branch}`]),
+      behind > 0 ? runGit(root, ['diff', '--find-renames', '--name-status', '-z', 'HEAD...@{u}', '--']) : null
+    ])
+    if (incomingDiff?.code === 0) {
+      const counts = { files: 0, added: 0, modified: 0, deleted: 0, renamed: 0 }
+      const entries = incomingDiff.stdout.split('\0')
+      for (let index = 0; entries[index];) {
+        const status = entries[index][0]
+        counts.files++
+        if (status === 'A' || status === 'C') counts.added++
+        else if (status === 'D') counts.deleted++
+        else if (status === 'R') counts.renamed++
+        else counts.modified++
+        // Rename and copy records have both the old and new path.
+        index += status === 'R' || status === 'C' ? 3 : 2
+      }
+      summary.incomingChanges = counts
+    }
+    if (head.code === 0) {
+      const [shortHash, subject, author, date] = head.stdout.trim().split('\0')
+      summary.headCommit = { shortHash, subject, author, date }
+    }
+    const remote = await runGit(root, ['remote', 'get-url', '--', upstreamRemote.stdout.trim() || 'origin'])
+    if (remote.code === 0) {
+      summary.remoteUrl = remote.stdout.trim().replace(/(:\/\/)[^/@\s]+@/, '$1').replace(/[?#].*$/, '')
+    }
+  }
+  return summary
 }
 
 export async function getWorkingChanges(dir: string): Promise<FileChange[]> {

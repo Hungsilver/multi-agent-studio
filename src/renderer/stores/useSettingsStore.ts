@@ -3,7 +3,7 @@ import { ACCENTS, THEMES } from '@shared/constants/themes'
 import type { CliStatus, OrchestratorConfig, ProviderId, ProviderQuotaStatus } from '@shared/types/ai'
 import type { AppSettings, WorkspaceRecord } from '@shared/types/workspace'
 
-export type ActiveNavTab = 'ai' | 'apps' | 'git' | 'governance' | 'usage' | 'settings'
+export type ActiveNavTab = 'ai' | 'apps' | 'git' | 'database' | 'governance' | 'usage' | 'settings'
 
 interface SettingsState {
   settings: AppSettings

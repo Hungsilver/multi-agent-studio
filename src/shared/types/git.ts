@@ -9,6 +9,9 @@ export interface RepoSummary {
   deletedLines: number
   untrackedCount: number
   dirtyCount: number
+  headCommit?: { shortHash: string; subject: string; author: string; date: string }
+  remoteUrl?: string
+  incomingChanges?: { files: number; added: number; modified: number; deleted: number; renamed: number }
 }
 
 export interface FileChange {

@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { commitChanges, getFileDiff, getLastCommitMessage, stageFiles } from '../src/main/git/diff-service'
+import { commitChanges, getFileDiff, getLastCommitMessage, getRepoSummary, stageFiles } from '../src/main/git/diff-service'
 import {
   applyHunkPatch,
   applyOrPopStash,
@@ -58,6 +58,36 @@ afterEach(() => {
 })
 
 describe('SourceTree Git Studio Operations', () => {
+  it('counts upstream added, modified, deleted and renamed files with a clean local working tree', async () => {
+    const repo = await createTempRepo()
+    const originalBranch = (await runGitChecked(repo, ['branch', '--show-current'])).trim()
+    fs.writeFileSync(path.join(repo, 'existing.txt'), 'Original contents\n')
+    fs.writeFileSync(path.join(repo, 'old-name.txt'), 'Renamed contents\n')
+    await runGitChecked(repo, ['add', 'existing.txt', 'old-name.txt'])
+    await runGitChecked(repo, ['commit', '-m', 'Extra base files'])
+    await runGitChecked(repo, ['switch', '-c', 'published'])
+    await runGitChecked(repo, ['rm', 'app.txt'])
+    await runGitChecked(repo, ['mv', 'old-name.txt', 'new-name.txt'])
+    fs.appendFileSync(path.join(repo, 'existing.txt'), 'Edited upstream\n')
+    fs.writeFileSync(path.join(repo, 'incoming.txt'), 'New upstream file\n')
+    await runGitChecked(repo, ['add', 'incoming.txt', 'existing.txt'])
+    await runGitChecked(repo, ['commit', '-m', 'Replace file upstream'])
+    await runGitChecked(repo, ['switch', originalBranch])
+    fs.writeFileSync(path.join(repo, 'local.txt'), 'Local commit only\n')
+    await runGitChecked(repo, ['add', 'local.txt'])
+    await runGitChecked(repo, ['commit', '-m', 'Local commit'])
+    await runGitChecked(repo, ['remote', 'add', 'origin', '.'])
+    await runGitChecked(repo, ['update-ref', 'refs/remotes/origin/main', 'published'])
+    await runGitChecked(repo, ['branch', '--set-upstream-to=origin/main'])
+
+    expect(await getRepoSummary(repo, true)).toMatchObject({
+      ahead: 1,
+      behind: 1,
+      dirtyCount: 0,
+      incomingChanges: { files: 4, added: 1, modified: 1, deleted: 1, renamed: 1 }
+    })
+  })
+
   it('validates ref names, commit hashes, and stash refs strictly', () => {
     expect(assertValidRefName('feat/new-ui')).toBe('feat/new-ui')
     expect(() => assertValidRefName('-rf')).toThrow()

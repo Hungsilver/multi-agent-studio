@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, Bot, GitBranch, Rocket, Settings } from 'lucide-react'
+import { BarChart3, BookOpen, Bot, Database, GitBranch, Rocket, Settings } from 'lucide-react'
 import { useAiStore } from '../../stores/useAiStore'
 import { useAppsStore } from '../../stores/useAppsStore'
 import { useSettingsStore, type ActiveNavTab } from '../../stores/useSettingsStore'
@@ -14,6 +14,7 @@ const NAV_ITEMS: Array<{ id: ActiveNavTab; label: string; shortLabel: string; ic
   { id: 'ai', label: 'AI Studio', shortLabel: 'AI Studio', icon: Bot },
   { id: 'apps', label: 'Ứng dụng Dev & IIS', shortLabel: 'Ứng dụng', icon: Rocket },
   { id: 'git', label: 'Git', shortLabel: 'Git', icon: GitBranch },
+  { id: 'database', label: 'Database', shortLabel: 'Database', icon: Database },
   { id: 'governance', label: 'Skills & Rules', shortLabel: 'Skills', icon: BookOpen },
   { id: 'usage', label: 'Thống kê', shortLabel: 'Thống kê', icon: BarChart3 },
   { id: 'settings', label: 'Cài đặt', shortLabel: 'Cài đặt', icon: Settings }

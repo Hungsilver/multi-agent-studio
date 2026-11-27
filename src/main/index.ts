@@ -1,21 +1,25 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { app, BrowserWindow, Notification } from 'electron'
+import { app, BrowserWindow, ipcMain, Notification } from 'electron'
 import { PROVIDERS } from '@shared/constants/providers'
 import type { ProviderId } from '@shared/types/ai'
 import { AgentOrchestrator } from './ai/orchestrator'
 import { AppsManager } from './apps/apps-manager'
 import { cleanupOldAppLogs } from './apps/apps-store'
+import { PostgresWorkspace } from './database/postgres-workspace'
+import { registerPostgresHandlers } from './ipc/postgres-handlers'
 import { registerIpcHandlers } from './ipc/register-handlers'
 import { WorkspaceDatabase } from './storage/database'
 import { WorkspaceRepository } from './storage/repositories'
 import { PtyManager } from './terminal/pty-manager'
 
 let mainWindow: BrowserWindow | null = null
+let desktopNote: BrowserWindow | null = null
 let db: WorkspaceDatabase | null = null
 let orchestrator: AgentOrchestrator | null = null
 let ptyManager: PtyManager | null = null
 let appsManager: AppsManager | null = null
+const postgresWorkspace = new PostgresWorkspace()
 
 function resolveAppIcon(): string | undefined {
   const candidates = [
@@ -25,7 +29,7 @@ function resolveAppIcon(): string | undefined {
   return candidates.find((p) => fs.existsSync(p))
 }
 
-function createWindow(): void {
+function createWindow(openDockedNote = false): void {
   const icon = resolveAppIcon()
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -53,12 +57,67 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null
+    void postgresWorkspace.close()
+  })
+  mainWindow.webContents.on('did-start-navigation', ({ isMainFrame, isSameDocument }) => {
+    if (isMainFrame && !isSameDocument) void postgresWorkspace.close()
   })
 
   if (process.env.ELECTRON_RENDERER_URL) {
-    void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
+    const url = new URL(process.env.ELECTRON_RENDERER_URL)
+    if (openDockedNote) url.hash = 'dock-note'
+    void mainWindow.loadURL(url.toString())
   } else {
-    void mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'))
+    void mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'), openDockedNote ? { hash: 'dock-note' } : undefined)
+  }
+}
+
+function focusDesktopNote(): boolean {
+  if (!desktopNote || desktopNote.isDestroyed()) return false
+  if (desktopNote.isMinimized()) desktopNote.restore()
+  desktopNote.show()
+  desktopNote.focus()
+  return true
+}
+
+async function openDesktopNote(): Promise<boolean> {
+  if (focusDesktopNote()) return true
+  const win = new BrowserWindow({
+    width: 280,
+    height: 420,
+    minWidth: 245,
+    minHeight: 200,
+    title: 'Ghi chú nhanh',
+    icon: resolveAppIcon(),
+    frame: false,
+    alwaysOnTop: true,
+    resizable: true,
+    maximizable: false,
+    show: false,
+    backgroundColor: '#1C222B',
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  })
+  desktopNote = win
+  win.once('closed', () => { desktopNote = null })
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  win.webContents.on('will-navigate', (event) => event.preventDefault())
+  try {
+    if (process.env.ELECTRON_RENDERER_URL) {
+      const url = new URL(process.env.ELECTRON_RENDERER_URL)
+      url.hash = 'desktop-note'
+      await win.loadURL(url.toString())
+    } else {
+      await win.loadFile(path.join(__dirname, '../renderer/index.html'), { hash: 'desktop-note' })
+    }
+    return desktopNote === win && focusDesktopNote()
+  } catch (error) {
+    if (!win.isDestroyed()) win.destroy()
+    throw error
   }
 }
 
@@ -77,7 +136,7 @@ if (!gotLock) {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
-    }
+    } else if (app.isReady()) createWindow()
   })
 
   // Bảo mật thẻ <webview> dùng cho Live Web Preview: luôn chạy sandboxed, không preload/nodeIntegration
@@ -145,6 +204,28 @@ if (!gotLock) {
       ptyManager,
       appsManager
     })
+    registerPostgresHandlers(() => mainWindow, postgresWorkspace)
+
+    ipcMain.handle('note:desktop', async (event, action: unknown) => {
+      if (event.sender === mainWindow?.webContents) {
+        if (action === 'open') return openDesktopNote()
+        if (action === 'focus') return focusDesktopNote()
+      }
+      if (desktopNote && event.sender === desktopNote.webContents && (action === 'close' || action === 'dock')) {
+        if (action === 'dock') {
+          if (!mainWindow) createWindow(true)
+          else {
+            if (mainWindow.isMinimized()) mainWindow.restore()
+            mainWindow.show()
+            mainWindow.focus()
+            mainWindow.webContents.send('note:docked')
+          }
+        }
+        desktopNote.close()
+        return true
+      }
+      return false
+    })
 
     createWindow()
 
@@ -165,6 +246,7 @@ if (!gotLock) {
   })
 
   app.on('before-quit', async () => {
+    void postgresWorkspace.close()
     await orchestrator?.stopAll()
     await appsManager?.stopAllTunnels()
     ptyManager?.killAll()

@@ -1,3 +1,4 @@
+import type { PostgresConnectionInfo, PostgresConnectionInput, PostgresQueryResponse, PostgresRelation } from './database'
 import type {
   AppsAlertPush,
   AppsBatchAction,
@@ -99,10 +100,22 @@ export interface PtyExitPush {
 }
 
 export interface WorkspaceApi {
+  connectPostgres: (input: PostgresConnectionInput, credential?: string, replaceId?: string) => Promise<PostgresConnectionInfo>
+  testPostgres: (input: PostgresConnectionInput, credential?: string) => Promise<void>
+  sealPostgresPassword: (input: PostgresConnectionInput, credential?: string) => Promise<string | undefined>
+  revealPostgresPassword: (input: PostgresConnectionInput, credential: string) => Promise<string>
+  listPostgresDatabases: (id: string) => Promise<string[]>
+  disconnectPostgres: (id: string) => Promise<void>
+  listPostgresRelations: (id: string) => Promise<PostgresRelation[]>
+  inspectPostgresRelation: (id: string, schema: string, relation: string, mode: 'data' | 'columns') => Promise<PostgresQueryResponse>
+  queryPostgres: (id: string, sql: string) => Promise<PostgresQueryResponse>
+
   // Window controls
   windowMinimize: () => Promise<void>
   windowMaximize: () => Promise<void>
   windowClose: () => Promise<void>
+  desktopNote: (action: 'open' | 'focus' | 'close' | 'dock') => Promise<boolean>
+  onNoteDocked: (callback: () => void) => () => void
   pickFolder: () => Promise<string | null>
   openInExplorer: (targetPath: string) => Promise<void>
   openInVsCode: (targetPath: string) => Promise<void>
@@ -180,7 +193,7 @@ export interface WorkspaceApi {
   deletePromptTemplate: (id: string) => Promise<void>
 
   // Git, Checkpoints & Worktrees
-  getRepoSummary: (dir: string) => Promise<RepoSummary>
+  getRepoSummary: (dir: string, includeDetails?: boolean) => Promise<RepoSummary>
   getWorkingChanges: (dir: string) => Promise<FileChange[]>
   getFileDiff: (dir: string, filePath: string, staged: boolean, code: string) => Promise<DiffResult>
   getTurnDiff: (dir: string, preTreeHash: string, postTreeHash?: string | null) => Promise<FileChange[]>
@@ -241,6 +254,7 @@ export interface WorkspaceApi {
   // Embedded Terminal (ConPTY)
   createPty: (opts: PtyCreateOptions) => Promise<PtySessionInfo>
   writePty: (ptyId: string, data: string) => void
+  copyPtyText: (text: string) => Promise<void>
   resizePty: (ptyId: string, cols: number, rows: number) => void
   killPty: (ptyId: string) => Promise<void>
   openInteractiveSessionPty: (sessionId: string) => Promise<PtySessionInfo>

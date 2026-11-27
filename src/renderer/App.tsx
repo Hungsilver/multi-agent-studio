@@ -5,6 +5,7 @@ import { XTermInstance } from './components/ai/EmbeddedTerminalPane'
 import { SessionSidebar } from './components/ai/SessionSidebar'
 import { UsageDashboard } from './components/analytics/UsageDashboard'
 import { AppsWorkspace } from './components/apps/AppsWorkspace'
+import { DatabaseWorkspace } from './components/database/DatabaseWorkspace'
 import { GitWorkspace } from './components/git/GitWorkspace'
 import { GovernanceStudio } from './components/governance/GovernanceStudio'
 import { FileViewerPanel } from './components/inspector/FileViewerPanel'
@@ -389,6 +390,7 @@ export function App(): React.JSX.Element {
         )}
         {activeTab === 'apps' && <AppsWorkspace />}
         {activeTab === 'git' && <GitWorkspace />}
+        <DatabaseWorkspace visible={activeTab === 'database'} />
         {activeTab === 'governance' && <GovernanceStudio />}
         {activeTab === 'usage' && <UsageDashboard />}
         {activeTab === 'settings' && <SettingsView />}
