@@ -386,7 +386,7 @@ export function registerIpcHandlers(params: {
   ipcMain.handle('gov:deleteTemplate', (_e, id: string) => repo.deletePromptTemplate(id))
 
   // Git, Checkpoints & Worktrees
-  ipcMain.handle('git:summary', (_e, dir: string) => getRepoSummary(dir))
+  ipcMain.handle('git:summary', (_e, dir: string, includeDetails?: boolean) => getRepoSummary(dir, includeDetails))
   ipcMain.handle('git:changes', (_e, dir: string) => getWorkingChanges(dir))
   ipcMain.handle('git:fileDiff', (_e, dir: string, filePath: string, staged: boolean, code: string) => {
     return getFileDiff(dir, filePath, staged, code)

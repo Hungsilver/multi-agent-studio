@@ -2,6 +2,7 @@ import { Minus, PanelLeftClose, PanelLeftOpen, Search, Square, X } from 'lucide-
 import appAvatar from '../../assets/app-avatar.png'
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import { useWorkspaceTabsStore } from '../../stores/useWorkspaceTabsStore'
+import { QuickNote } from './QuickNote'
 
 export function TitleBar(): React.JSX.Element {
   const setCommandPaletteOpen = useSettingsStore((s) => s.setCommandPaletteOpen)
@@ -66,6 +67,7 @@ export function TitleBar(): React.JSX.Element {
       </button>
 
       <div className="app-no-drag flex items-center gap-0.5">
+        <QuickNote />
         <button
           type="button"
           onClick={() => void window.workspaceApi.windowMinimize()}

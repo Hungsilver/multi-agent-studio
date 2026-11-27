@@ -9,9 +9,20 @@ function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
 }
 
 const api: WorkspaceApi = {
+  connectPostgres: (input, credential, replaceId) => ipcRenderer.invoke('postgres:connect', input, credential, replaceId),
+  testPostgres: (input, credential) => ipcRenderer.invoke('postgres:test', input, credential),
+  sealPostgresPassword: (input, credential) => ipcRenderer.invoke('postgres:seal', input, credential),
+  revealPostgresPassword: (input, credential) => ipcRenderer.invoke('postgres:reveal', input, credential),
+  listPostgresDatabases: (id) => ipcRenderer.invoke('postgres:databases', id),
+  disconnectPostgres: (id) => ipcRenderer.invoke('postgres:disconnect', id),
+  listPostgresRelations: (id) => ipcRenderer.invoke('postgres:relations', id),
+  inspectPostgresRelation: (id, schema, relation, mode) => ipcRenderer.invoke('postgres:inspect', id, schema, relation, mode),
+  queryPostgres: (id, sql) => ipcRenderer.invoke('postgres:query', id, sql),
   windowMinimize: () => ipcRenderer.invoke('window:minimize'),
   windowMaximize: () => ipcRenderer.invoke('window:maximize'),
   windowClose: () => ipcRenderer.invoke('window:close'),
+  desktopNote: (action) => ipcRenderer.invoke('note:desktop', action),
+  onNoteDocked: (callback) => subscribe<void>('note:docked', callback),
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
   openInExplorer: (targetPath) => ipcRenderer.invoke('os:openExplorer', targetPath),
   openInVsCode: (targetPath) => ipcRenderer.invoke('os:openVsCode', targetPath),
@@ -64,7 +75,7 @@ const api: WorkspaceApi = {
   savePromptTemplate: (tpl) => ipcRenderer.invoke('gov:saveTemplate', tpl),
   deletePromptTemplate: (id) => ipcRenderer.invoke('gov:deleteTemplate', id),
 
-  getRepoSummary: (dir) => ipcRenderer.invoke('git:summary', dir),
+  getRepoSummary: (dir, includeDetails) => ipcRenderer.invoke('git:summary', dir, includeDetails),
   getWorkingChanges: (dir) => ipcRenderer.invoke('git:changes', dir),
   getFileDiff: (dir, filePath, staged, code) => ipcRenderer.invoke('git:fileDiff', dir, filePath, staged, code),
   getTurnDiff: (dir, preTreeHash, postTreeHash) => ipcRenderer.invoke('git:turnDiff', dir, preTreeHash, postTreeHash),

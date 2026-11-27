@@ -35,6 +35,7 @@ import { useAppsStore, type AppsSortCol, type AppsTypeFilter } from '../../store
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import { useTerminalStore } from '../../stores/useTerminalStore'
 import { useWorkspaceTabsStore } from '../../stores/useWorkspaceTabsStore'
+import { AppGitPanel } from './AppGitPanel'
 import {
   AddEditAppModal,
   IisSitesModal,
@@ -104,13 +105,18 @@ export function AppsWorkspace(): React.JSX.Element {
   const clearPending = useAppsStore((s) => s.clearPending)
   const setFailed = useAppsStore((s) => s.setFailed)
   const setBatchBusy = useAppsStore((s) => s.setBatchBusy)
-  const openLog = useAppsStore((s) => s.openLog)
+  const loadLog = useAppsStore((s) => s.openLog)
   const refreshLog = useAppsStore((s) => s.refreshLog)
   const clearLog = useAppsStore((s) => s.clearLog)
   const closeLog = useAppsStore((s) => s.closeLog)
 
   const [spinTick, setSpinTick] = useState(0)
   const [logHeight, setLogHeight] = useState(230)
+  const [gitAppId, setGitAppId] = useState<string | null>(() => {
+    const { lastClickedId, selectedIds } = useAppsStore.getState()
+    return lastClickedId && selectedIds.includes(lastClickedId) ? lastClickedId : null
+  })
+  const [drawerOpen, setDrawerOpen] = useState(true)
   const [logSearch, setLogSearch] = useState('')
   const [scanOpen, setScanOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<DevAppConfig | 'new' | null>(null)
@@ -126,6 +132,11 @@ export function AppsWorkspace(): React.JSX.Element {
   const ctxMenuRef = useRef<HTMLDivElement | null>(null)
   const logPreRef = useRef<HTMLPreElement | null>(null)
   const logStickBottomRef = useRef(true)
+
+  const openLog = (appId: string): Promise<void> => {
+    setDrawerOpen(true)
+    return loadLog(appId)
+  }
 
   // Initial load + 5s poll (2s when pending ops active)
   useEffect(() => {
@@ -327,6 +338,11 @@ export function AppsWorkspace(): React.JSX.Element {
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (document.querySelector('[role="dialog"]')) return
+      if (e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey && e.code === 'Backquote') {
+        e.preventDefault()
+        if (!e.repeat) setDrawerOpen((open) => !open)
+        return
+      }
       const tag = (e.target as HTMLElement | null)?.tagName
       const inInput = tag === 'INPUT' || tag === 'TEXTAREA'
 
@@ -558,6 +574,7 @@ export function AppsWorkspace(): React.JSX.Element {
   )
 
   const activeLogApp = apps.find((a) => a.id === logAppId) ?? null
+  const gitApp = apps.find((app) => app.id === gitAppId)
 
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden" data-apps-studio="true">
@@ -768,6 +785,10 @@ export function AppsWorkspace(): React.JSX.Element {
                   key={app.id}
                   data-app-row={app.id}
                   onClick={(e) => {
+                    if (!e.shiftKey && !e.ctrlKey && !e.metaKey) {
+                      setGitAppId(app.dir ? app.id : null)
+                      if (app.dir) setDrawerOpen(true)
+                    }
                     if (e.shiftKey) {
                       selectRange(
                         filteredApps.map((a) => a.id),
@@ -808,7 +829,7 @@ export function AppsWorkspace(): React.JSX.Element {
                   </td>
                   <td className="py-2 px-2.5">
                     <div className="font-medium flex items-center gap-1.5">
-                      <span>{app.name}</span>
+                      {app.dir ? <button type="button" className="cursor-pointer text-left hover:underline">{app.name}</button> : <span>{app.name}</span>}
                       {app.iis && (
                         <span className="px-1.5 py-0.2 rounded text-[10px] font-mono border" style={{ borderColor: 'var(--border)', color: 'var(--info)' }}>
                           IIS
@@ -965,11 +986,15 @@ export function AppsWorkspace(): React.JSX.Element {
         </table>
       </div>
 
+      {gitApp?.dir && (
+        <AppGitPanel key={gitApp.dir} dir={gitApp.dir} name={gitApp.name} hidden={!drawerOpen} onClose={() => setGitAppId(null)} />
+      )}
+
       {/* Resizable Bottom Live Log Drawer */}
       {logAppId && (
         <div
           data-apps-log-drawer="true"
-          className="border-t flex flex-col shrink-0"
+          className={drawerOpen ? 'border-t flex flex-col shrink-0 max-h-[55%]' : 'hidden'}
           style={{ height: `${logHeight}px`, borderColor: 'var(--border)', backgroundColor: 'var(--surface)' }}
         >
           <div

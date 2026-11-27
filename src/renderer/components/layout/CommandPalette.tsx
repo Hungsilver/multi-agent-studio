@@ -5,6 +5,7 @@ import {
   Bot,
   CheckSquare,
   Columns2,
+  Database,
   FolderGit2,
   FolderTree,
   GitBranch,
@@ -78,6 +79,7 @@ export function CommandPalette(): React.JSX.Element | null {
       { tab: 'ai', label: 'Chuyển tới AI Coding Studio', icon: <Bot className="w-4 h-4" /> },
       { tab: 'apps', label: 'Chuyển tới Ứng dụng (Apps Studio)', icon: <Rocket className="w-4 h-4" /> },
       { tab: 'git', label: 'Chuyển tới Git Workspace', icon: <GitBranch className="w-4 h-4" /> },
+      { tab: 'database', label: 'Chuyển tới Database', icon: <Database className="w-4 h-4" /> },
       { tab: 'governance', label: 'Chuyển tới Skills & AGENTS.md Studio', icon: <BookOpen className="w-4 h-4" /> },
       { tab: 'usage', label: 'Chuyển tới Thống kê Token & Chi phí', icon: <BarChart3 className="w-4 h-4" /> },
       { tab: 'settings', label: 'Chuyển tới Cài đặt & Chẩn đoán CLI', icon: <Settings className="w-4 h-4" /> }

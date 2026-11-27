@@ -45,6 +45,16 @@ body,
   -webkit-app-region: no-drag;
 }
 
+.quick-note-preview :is(p, .quick-note-line, pre) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.quick-note-preview[data-wrap='false'] :is(p, li, .quick-note-line, pre) {
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
 .btn-ghost:hover {
   background-color: color-mix(in srgb, var(--text) 8%, transparent);
 }
