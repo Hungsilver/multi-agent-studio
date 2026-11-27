@@ -118,6 +118,7 @@ const api: WorkspaceApi = {
 
   createPty: (opts) => ipcRenderer.invoke('pty:create', opts),
   writePty: (ptyId, data) => ipcRenderer.send('pty:write', ptyId, data),
+  copyPtyText: (text) => ipcRenderer.invoke('pty:copy-text', text),
   resizePty: (ptyId, cols, rows) => ipcRenderer.send('pty:resize', ptyId, cols, rows),
   killPty: (ptyId) => ipcRenderer.invoke('pty:kill', ptyId),
   openInteractiveSessionPty: (sessionId) => ipcRenderer.invoke('pty:openInteractiveSession', sessionId),

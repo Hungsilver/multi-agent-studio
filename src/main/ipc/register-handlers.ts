@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
 import { PROVIDERS } from '@shared/constants/providers'
 import type { AiAttachment, ProviderId } from '@shared/types/ai'
 import type { FileChange, GitGraphQuery, HunkAction, ResetMode } from '@shared/types/git'
@@ -502,6 +502,7 @@ export function registerIpcHandlers(params: {
   // PTY
   ipcMain.handle('pty:create', (_e, opts: PtyCreateOptions) => ptyManager.create(opts))
   ipcMain.on('pty:write', (_e, ptyId: string, data: string) => ptyManager.write(ptyId, data))
+  ipcMain.handle('pty:copy-text', (_e, text: string) => clipboard.writeText(text))
   ipcMain.on('pty:resize', (_e, ptyId: string, cols: number, rows: number) => ptyManager.resize(ptyId, cols, rows))
   ipcMain.handle('pty:kill', (_e, ptyId: string) => ptyManager.kill(ptyId))
   ipcMain.handle('pty:openInteractiveSession', (_e, sessionId: string) => {

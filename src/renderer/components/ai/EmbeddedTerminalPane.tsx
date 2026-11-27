@@ -1,16 +1,37 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal as XTerm } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import { Plus, TerminalSquare, X } from 'lucide-react'
+import { Copy, Plus, TerminalSquare, X } from 'lucide-react'
 import { THEMES } from '@shared/constants/themes'
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import { useTerminalStore } from '../../stores/useTerminalStore'
 
+const removeAntigravityCommand = 'Remove-Item -LiteralPath "$env:LOCALAPPDATA\\agy\\bin\\agy.exe" -Force'
+
+async function copyTerminalText(text: string): Promise<void> {
+  if (!text) return
+  const { showToast } = useSettingsStore.getState()
+  try {
+    await window.workspaceApi.copyPtyText(text)
+    showToast('Đã sao chép nội dung terminal', 'ok')
+  } catch {
+    showToast('Không thể sao chép nội dung terminal', 'err')
+  }
+}
+
 export function XTermInstance({ ptyId }: { ptyId: string }): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const terminalRef = useRef<XTerm | null>(null)
+  const [hasSelection, setHasSelection] = useState(false)
+  const [applied, setApplied] = useState(false)
   const themeName = useSettingsStore((s) => s.settings.theme)
+  const recommendReinstall = useTerminalStore((s) => {
+    const tab = s.tabs.find((tab) => tab.id === ptyId)
+    return tab?.installProvider === 'agy' && !tab.exited &&
+      tab.buffer.includes("'agy.exe' is already installed at")
+  })
 
   useEffect(() => {
     const el = containerRef.current
@@ -31,6 +52,18 @@ export function XTermInstance({ ptyId }: { ptyId: string }): React.JSX.Element {
     term.loadAddon(fitAddon)
     term.loadAddon(new WebLinksAddon())
     term.open(el)
+    terminalRef.current = term
+    setHasSelection(false)
+    const selectionListener = term.onSelectionChange(() => setHasSelection(term.hasSelection()))
+    term.attachCustomKeyEventHandler((event) => {
+      const copyKey = (event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'c'
+      if (!copyKey || (!event.shiftKey && !term.hasSelection())) return true
+      if (event.type === 'keydown') {
+        event.preventDefault()
+        if (!event.repeat) void copyTerminalText(term.getSelection())
+      }
+      return false
+    })
     fitAddon.fit()
     window.workspaceApi.resizePty(ptyId, term.cols, term.rows)
 
@@ -69,13 +102,63 @@ export function XTermInstance({ ptyId }: { ptyId: string }): React.JSX.Element {
     return () => {
       ro.disconnect()
       disp.dispose()
+      selectionListener.dispose()
       unsubData()
       unsubExit()
+      terminalRef.current = null
       term.dispose()
     }
   }, [ptyId, themeName])
 
-  return <div ref={containerRef} className="w-full h-full p-1" />
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center justify-end px-2 py-1 text-xs" style={{ color: 'var(--muted)' }}>
+        <button
+          type="button"
+          className="btn-ghost flex items-center gap-1 rounded px-2 py-1 disabled:opacity-50"
+          title="Sao chép vùng chọn (Ctrl+C hoặc Ctrl+Shift+C)"
+          disabled={!hasSelection}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => void copyTerminalText(terminalRef.current?.getSelection() ?? '')}
+        >
+          <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+          Sao chép
+        </button>
+      </div>
+      {recommendReinstall && (
+        <div className="mx-2 mb-1 flex flex-wrap items-center gap-2 rounded border px-2 py-1.5 text-xs" style={{ borderColor: 'var(--border)' }}>
+          <div className="min-w-0 flex-1 basis-64">
+            <p>Antigravity CLI đã được cài. Nếu muốn cài mới, hãy xoá bản hiện tại trước.</p>
+            <code className="block select-text break-all" style={{ color: 'var(--muted)' }}>{removeAntigravityCommand}</code>
+          </div>
+          <button
+            type="button"
+            className="btn-ghost flex items-center gap-1 rounded px-2 py-1"
+            onClick={() => void copyTerminalText(removeAntigravityCommand)}
+          >
+            <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+            Sao chép lệnh
+          </button>
+          <button
+            type="button"
+            className="btn-ghost rounded px-2 py-1 disabled:opacity-50"
+            disabled={applied}
+            title="Điền lệnh vào PowerShell để bạn kiểm tra trước khi nhấn Enter"
+            onClick={() => {
+              const term = terminalRef.current
+              if (!term) return
+              term.focus()
+              term.paste(removeAntigravityCommand)
+              setApplied(true)
+            }}
+          >
+            {applied ? 'Đã điền lệnh' : 'Apply'}
+          </button>
+        </div>
+      )}
+      <div ref={containerRef} className="min-h-0 w-full flex-1 p-1" />
+    </div>
+  )
 }
 
 export function EmbeddedTerminalPane({ defaultCwd }: { defaultCwd: string }): React.JSX.Element {

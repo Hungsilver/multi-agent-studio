@@ -241,6 +241,7 @@ export interface WorkspaceApi {
   // Embedded Terminal (ConPTY)
   createPty: (opts: PtyCreateOptions) => Promise<PtySessionInfo>
   writePty: (ptyId: string, data: string) => void
+  copyPtyText: (text: string) => Promise<void>
   resizePty: (ptyId: string, cols: number, rows: number) => void
   killPty: (ptyId: string) => Promise<void>
   openInteractiveSessionPty: (sessionId: string) => Promise<PtySessionInfo>

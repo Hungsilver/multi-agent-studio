@@ -62,7 +62,7 @@ export function SettingsView(): React.JSX.Element {
 
   const handleInstallCli = async (provider: ProviderId): Promise<void> => {
     const res = await window.workspaceApi.installOrUpdateCli(provider)
-    attachExistingPty({ id: res.ptyId, title: `Cài ${PROVIDERS[provider].name}`, cwd: '', backend: 'conpty' })
+    attachExistingPty({ id: res.ptyId, title: `Cài ${PROVIDERS[provider].name}`, cwd: '', backend: 'conpty' }, provider)
     openToolTab({ kind: 'terminal', title: `Cài ${PROVIDERS[provider].name}`, ptyId: res.ptyId })
     setActiveTab('ai')
   }
