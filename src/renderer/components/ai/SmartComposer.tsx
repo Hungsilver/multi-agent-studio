@@ -5,6 +5,7 @@ import {
   Brain,
   Cpu,
   FileText,
+  Gauge,
   GitBranch,
   GitCompare,
   Image as ImageIcon,
@@ -12,14 +13,19 @@ import {
   Shield,
   Sparkles,
   Square,
+  Workflow,
   X
 } from 'lucide-react'
 import { PROVIDERS } from '@shared/constants/providers'
 import type { AiAttachment, EffortLevel, PermissionMode } from '@shared/types/ai'
 import { useAiStore } from '../../stores/useAiStore'
-import { useGitStore } from '../../stores/useGitStore'
+import { normalizeGitDirKey, useGitStore } from '../../stores/useGitStore'
 import { useGovernanceStore } from '../../stores/useGovernanceStore'
-import { getModelsForProvider, useSettingsStore } from '../../stores/useSettingsStore'
+import { getDefaultModelForProvider, getModelsForProvider, useSettingsStore } from '../../stores/useSettingsStore'
+import { CustomSelect } from '../common/CustomSelect'
+import { ContextMeterWidget } from './ContextMeterWidget'
+import { OrchestratorWidget } from './OrchestratorWidget'
+import { QuotaRingWidget } from './QuotaRingWidget'
 
 const MODE_LABELS: Record<PermissionMode, { label: string; desc: string }> = {
   plan: { label: 'Chỉ đọc (Plan)', desc: 'Phân tích & lập kế hoạch, không sửa file' },
@@ -28,21 +34,30 @@ const MODE_LABELS: Record<PermissionMode, { label: string; desc: string }> = {
 }
 
 type AtOption = { id: string; kind: 'diff' | 'file'; label: string; value: string }
-type SlashOption = { id: string; kind: 'template' | 'skill'; cmd: string; title: string; body: string }
+type SlashOption = { id: string; kind: 'template' | 'skill' | 'action'; cmd: string; title: string; body: string }
 
-export function SmartComposer(): React.JSX.Element | null {
-  const detail = useAiStore((s) => s.activeDetail)
+interface SmartComposerProps {
+  sessionId?: string
+  compact?: boolean
+  onFocusPane?: () => void
+}
+
+export function SmartComposer({ sessionId, compact = false, onFocusPane }: SmartComposerProps = {}): React.JSX.Element | null {
+  const detail = useAiStore((s) => (sessionId ? s.detailsBySessionId[sessionId] ?? null : s.activeDetail))
   const draftBySession = useAiStore((s) => s.draftBySession)
   const setDraft = useAiStore((s) => s.setDraft)
   const sendPrompt = useAiStore((s) => s.sendPrompt)
   const stopRun = useAiStore((s) => s.stopRun)
   const updateSessionMeta = useAiStore((s) => s.updateSessionMeta)
   const updateMemory = useAiStore((s) => s.updateMemory)
+  const compactSessionContext = useAiStore((s) => s.compactSessionContext)
   const setInspectorOpen = useAiStore((s) => s.setInspectorOpen)
   const setInspectorTab = useAiStore((s) => s.setInspectorTab)
 
-  const gitSummary = useGitStore((s) => s.summary)
+  const summaryByDir = useGitStore((s) => s.summaryByDir)
+  const ensureSummaryForDir = useGitStore((s) => s.ensureSummaryForDir)
   const cliStatuses = useSettingsStore((s) => s.cliStatuses)
+  const orchestratorConfig = useSettingsStore((s) => s.orchestratorConfig)
   const showToast = useSettingsStore((s) => s.showToast)
 
   const skills = useGovernanceStore((s) => s.skills)
@@ -69,9 +84,21 @@ export function SmartComposer(): React.JSX.Element | null {
   const providerStates = detail?.providerStates ?? []
   const prompt = session ? draftBySession[session.id] ?? '' : ''
   const workDir = session ? session.worktreePath || session.workspacePath : ''
+  const gitSummary = workDir ? summaryByDir[normalizeGitDirKey(workDir)] ?? null : null
+
+  useEffect(() => {
+    if (workDir) {
+      void ensureSummaryForDir(workDir)
+    }
+  }, [workDir, turns.length, session?.status, ensureSummaryForDir])
 
   const models = useMemo(
     () => (session ? getModelsForProvider(cliStatuses, session.provider) : []),
+    [cliStatuses, session]
+  )
+
+  const defaultModelInfo = useMemo(
+    () => (session ? getDefaultModelForProvider(cliStatuses, session.provider) : { model: null, source: null }),
     [cliStatuses, session]
   )
 
@@ -132,13 +159,22 @@ export function SmartComposer(): React.JSX.Element | null {
   }, [atQuery, atFiles])
 
   const slashOptions = useMemo<SlashOption[]>(() => {
+    const actions: SlashOption[] = [
+      {
+        id: '__compact__',
+        kind: 'action' as const,
+        cmd: '/compact',
+        title: 'Nén ngữ cảnh hiện tại vào Session Memory',
+        body: ''
+      }
+    ].filter((a) => !slashQuery || a.cmd.includes(slashQuery) || a.title.toLowerCase().includes(slashQuery))
     const tpls: SlashOption[] = templates
       .filter((t) => !slashQuery || t.slashCmd.toLowerCase().includes(slashQuery) || t.title.toLowerCase().includes(slashQuery))
       .map((t) => ({ id: t.id, kind: 'template', cmd: t.slashCmd, title: t.title, body: t.body }))
     const sks: SlashOption[] = skills
       .filter((s) => !slashQuery || s.name.toLowerCase().includes(slashQuery) || s.description.toLowerCase().includes(slashQuery))
       .map((s) => ({ id: s.id, kind: 'skill', cmd: `/${s.name}`, title: s.description, body: s.name }))
-    return [...tpls, ...sks]
+    return [...actions, ...tpls, ...sks]
   }, [templates, skills, slashQuery])
 
   if (!session || !memory) return null
@@ -188,6 +224,18 @@ export function SmartComposer(): React.JSX.Element | null {
   }
 
   const pickSlashOption = async (opt: SlashOption): Promise<void> => {
+    if (opt.kind === 'action' && opt.id === '__compact__') {
+      setDraft(session.id, '')
+      setSlashMenuOpen(false)
+      try {
+        const res = await compactSessionContext(session.id)
+        showToast(`Đã nén ${res.compactedTurnsCount} lượt (${res.beforeTokens.toLocaleString()} → ${res.afterTokens.toLocaleString()} token)`, 'ok')
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : 'Nén ngữ cảnh thất bại', 'err')
+      }
+      textareaRef.current?.focus()
+      return
+    }
     if (opt.kind === 'template') {
       setDraft(session.id, `${opt.body}\n\n`)
     } else {
@@ -225,6 +273,16 @@ export function SmartComposer(): React.JSX.Element | null {
   const handleSend = async (): Promise<void> => {
     const text = prompt.trim()
     if ((!text && attachments.length === 0) || isRunning || sending) return
+    if (text === '/compact' && attachments.length === 0) {
+      setDraft(session.id, '')
+      try {
+        const res = await compactSessionContext(session.id)
+        showToast(`Đã nén ${res.compactedTurnsCount} lượt (${res.beforeTokens.toLocaleString()} → ${res.afterTokens.toLocaleString()} token)`, 'ok')
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : 'Nén ngữ cảnh thất bại', 'err')
+      }
+      return
+    }
     if (session.permissionMode === 'full') {
       const ok = window.confirm(
         `Chế độ Toàn quyền: ${provMeta.name} được phép sửa file và chạy mọi lệnh shell trong\n${workDir}\n\nTiếp tục?`
@@ -239,7 +297,8 @@ export function SmartComposer(): React.JSX.Element | null {
       await sendPrompt({
         sessionId: session.id,
         prompt: text || 'Hãy kiểm tra các tệp đã đính kèm.',
-        attachments: toSend
+        attachments: toSend,
+        orchestrator: orchestratorConfig.enabled ? orchestratorConfig : undefined
       })
     } catch (err) {
       setDraft(session.id, text)
@@ -303,11 +362,15 @@ export function SmartComposer(): React.JSX.Element | null {
   }
 
   return (
-    <div ref={containerRef} className="shrink-0 px-6 pb-4 pt-1.5">
+    <div
+      ref={containerRef}
+      onMouseDown={() => onFocusPane?.()}
+      className={`shrink-0 ${compact ? 'px-3 pb-3 pt-1' : 'px-6 pb-4 pt-1.5'}`}
+    >
       <div className="max-w-3xl mx-auto relative space-y-1.5">
         {/* Live Context Strip */}
-        <div className="flex items-center justify-between gap-2 px-2 text-[11px]" style={{ color: 'var(--muted)' }}>
-          <div className="flex items-center gap-3 min-w-0">
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-1 text-[11px]" style={{ color: 'var(--muted)' }}>
+          <div className="flex items-center gap-2.5 min-w-0">
             {gitSummary?.isRepo && (
               <button
                 type="button"
@@ -315,12 +378,12 @@ export function SmartComposer(): React.JSX.Element | null {
                   setInspectorTab('changes')
                   setInspectorOpen(true)
                 }}
-                className="inline-flex items-center gap-1 hover:underline cursor-pointer truncate"
+                className="inline-flex items-center gap-1 hover:underline cursor-pointer min-w-0"
               >
-                <GitBranch className="w-3 h-3" style={{ color: 'var(--accent)' }} />
-                <span className="font-mono">{gitSummary.branch}</span>
+                <GitBranch className="w-3 h-3 shrink-0" style={{ color: 'var(--accent)' }} />
+                <span className="font-mono truncate max-w-[110px]">{gitSummary.branch}</span>
                 {(gitSummary.addedLines > 0 || gitSummary.deletedLines > 0 || gitSummary.untrackedCount > 0) && (
-                  <span style={{ color: 'var(--warn)' }}>
+                  <span className="shrink-0 whitespace-nowrap" style={{ color: 'var(--warn)' }}>
                     +{gitSummary.addedLines}/-{gitSummary.deletedLines}
                     {gitSummary.untrackedCount > 0 ? ` · ${gitSummary.untrackedCount} mới` : ''}
                   </span>
@@ -334,24 +397,31 @@ export function SmartComposer(): React.JSX.Element | null {
                 setInspectorTab('memory')
                 setInspectorOpen(true)
               }}
-              className="inline-flex items-center gap-1 hover:underline cursor-pointer"
+              className="inline-flex items-center gap-1 hover:underline cursor-pointer shrink-0 whitespace-nowrap"
             >
-              <Brain className="w-3 h-3" />
+              <Brain className="w-3 h-3 shrink-0" />
               <span>
-                Memory: {memory.decisions.length} quyết định · {memory.activeSkillIds.length} skill
+                {compact
+                  ? `Mem: ${memory.decisions.length} · ${memory.activeSkillIds.length}sk`
+                  : `Memory: ${memory.decisions.length} quyết định · ${memory.activeSkillIds.length} skill`}
               </span>
             </button>
           </div>
 
-          {unsyncedCount > 0 && (
-            <span
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-medium shrink-0"
-              style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent)' }}
-            >
-              <ArrowLeftRight className="w-3 h-3" />
-              Sẽ đồng bộ {unsyncedCount} lượt → {provMeta.shortName}
-            </span>
-          )}
+          <div className="flex items-center gap-1.5 shrink-0">
+            <ContextMeterWidget session={session} turns={turns} memory={memory} compact={compact} />
+            <QuotaRingWidget activeProvider={session.provider} turns={turns} />
+
+            {unsyncedCount > 0 && (
+              <span
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-medium shrink-0"
+                style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent)' }}
+              >
+                <ArrowLeftRight className="w-3 h-3" />
+                Sẽ đồng bộ {unsyncedCount} lượt → {provMeta.shortName}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* @file / @diff Popover */}
@@ -416,7 +486,7 @@ export function SmartComposer(): React.JSX.Element | null {
                   {opt.title}
                 </span>
                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-subtle shrink-0" style={{ color: 'var(--muted)' }}>
-                  {opt.kind === 'skill' ? 'Skill' : 'Mẫu'}
+                  {opt.kind === 'action' ? 'Lệnh' : opt.kind === 'skill' ? 'Skill' : 'Mẫu'}
                 </span>
               </button>
             ))}
@@ -433,9 +503,33 @@ export function SmartComposer(): React.JSX.Element | null {
           className="rounded-2xl border p-3 shadow-lg transition-colors"
           style={{
             backgroundColor: 'var(--surface)',
-            borderColor: 'var(--border)'
+            borderColor: orchestratorConfig.enabled ? 'color-mix(in srgb, var(--accent) 55%, var(--border))' : 'var(--border)'
           }}
         >
+          {orchestratorConfig.enabled && (
+            <div
+              className="mb-2 px-2.5 py-1 rounded-lg border flex items-center justify-between gap-2 text-[11px]"
+              style={{
+                backgroundColor: 'var(--accent-soft)',
+                borderColor: 'color-mix(in srgb, var(--accent) 35%, transparent)',
+                color: 'var(--text)'
+              }}
+            >
+              <span className="flex items-center gap-1.5 truncate">
+                <Workflow className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--accent)' }} />
+                <strong style={{ color: 'var(--accent)' }}>Orchestrator:</strong>
+                <span className="truncate">
+                  {PROVIDERS[orchestratorConfig.plannerProvider].shortName} (Plan) →{' '}
+                  {PROVIDERS[orchestratorConfig.executorProvider].shortName} (Thực thi)
+                  {orchestratorConfig.verifyAfterExecute ? ' → Kiểm duyệt' : ''}
+                </span>
+              </span>
+              <span className="text-[10px] shrink-0" style={{ color: 'var(--muted)' }}>
+                {orchestratorConfig.autoExecute ? 'Tự động chạy' : 'Hỏi duyệt Plan'}
+              </span>
+            </div>
+          )}
+
           {(attachments.length > 0 || memory.activeSkillIds.length > 0) && (
             <div className="flex flex-wrap gap-1.5 mb-2">
               {memory.activeSkillIds.map((sid) => {
@@ -499,8 +593,8 @@ export function SmartComposer(): React.JSX.Element | null {
             style={{ color: 'var(--text)', minHeight: '48px', maxHeight: '180px' }}
           />
 
-          <div className="mt-2 pt-2 border-t flex items-center justify-between gap-2 flex-wrap" style={{ borderColor: 'var(--border)' }}>
-            <div className="flex items-center gap-1.5 flex-wrap">
+          <div className="mt-2 pt-2 border-t flex items-center justify-between gap-2 flex-wrap min-w-0" style={{ borderColor: 'var(--border)' }}>
+            <div className="flex items-center gap-1.5 flex-wrap min-w-0 max-w-full">
               <button
                 type="button"
                 onClick={() => {
@@ -515,64 +609,86 @@ export function SmartComposer(): React.JSX.Element | null {
                 <Paperclip className="w-3.5 h-3.5" />
               </button>
 
-              <div className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-xs" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg)' }}>
-                <Shield className="w-3 h-3" style={{ color: session.permissionMode === 'full' ? 'var(--warn)' : 'var(--muted)' }} />
-                <select
-                  value={session.permissionMode}
-                  disabled={isRunning}
-                  onChange={(e) => void updateSessionMeta(session.id, { permissionMode: e.target.value as PermissionMode })}
-                  className="bg-transparent outline-none text-xs cursor-pointer"
-                  style={{ color: 'var(--text)' }}
-                  title={MODE_LABELS[session.permissionMode].desc}
-                >
-                  <option value="plan" style={{ backgroundColor: 'var(--surface)' }}>Chỉ đọc (Plan)</option>
-                  <option value="edit" style={{ backgroundColor: 'var(--surface)' }}>Cho sửa file</option>
-                  <option value="full" style={{ backgroundColor: 'var(--surface)' }}>Toàn quyền</option>
-                </select>
-              </div>
+              <CustomSelect<PermissionMode>
+                value={session.permissionMode}
+                disabled={isRunning}
+                onChange={(val) => void updateSessionMeta(session.id, { permissionMode: val })}
+                preferredPlacement="top"
+                menuMinWidth={240}
+                title={MODE_LABELS[session.permissionMode].desc}
+                icon={
+                  <Shield
+                    className="w-3.5 h-3.5"
+                    style={{ color: session.permissionMode === 'full' ? 'var(--warn)' : 'var(--muted)' }}
+                  />
+                }
+                options={(['plan', 'edit', 'full'] as PermissionMode[]).map((m) => ({
+                  value: m,
+                  label: MODE_LABELS[m].label,
+                  description: MODE_LABELS[m].desc
+                }))}
+              />
 
-              <div className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-xs" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg)' }}>
-                <Cpu className="w-3 h-3" style={{ color: 'var(--muted)' }} />
-                <select
-                  value={session.model}
-                  disabled={isRunning}
-                  onChange={(e) => void updateSessionMeta(session.id, { model: e.target.value })}
-                  className="bg-transparent outline-none text-xs cursor-pointer max-w-[175px]"
-                  style={{ color: 'var(--text)' }}
-                >
-                  <option value="" style={{ backgroundColor: 'var(--surface)' }}>
-                    Mặc định (tự động)
-                  </option>
-                  {models.map((m) => (
-                    <option key={m} value={m} style={{ backgroundColor: 'var(--surface)' }}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <CustomSelect<string>
+                value={session.model}
+                disabled={isRunning}
+                onChange={(val) => void updateSessionMeta(session.id, { model: val })}
+                preferredPlacement="top"
+                menuMinWidth={270}
+                className="max-w-[240px]"
+                title={
+                  defaultModelInfo.model
+                    ? `Chọn model AI (mặc định CLI: ${defaultModelInfo.model})`
+                    : 'Chọn model AI'
+                }
+                icon={<Cpu className="w-3.5 h-3.5" style={{ color: 'var(--muted)' }} />}
+                options={[
+                  {
+                    value: '',
+                    label: defaultModelInfo.model ? `Mặc định (${defaultModelInfo.model})` : 'Mặc định (tự động)',
+                    description: defaultModelInfo.model
+                      ? `Model mặc định của CLI${defaultModelInfo.source ? ` · ${defaultModelInfo.source}` : ''}`
+                      : 'Dùng model mặc định của CLI'
+                  },
+                  ...models.map((m) => ({
+                    value: m,
+                    label: m,
+                    badge:
+                      defaultModelInfo.model === m
+                        ? 'Mặc định'
+                        : m.toLowerCase().includes('orchestrator')
+                          ? 'Orchestrator'
+                          : undefined
+                  }))
+                ]}
+              />
 
               {provMeta.supportsEffort && !modelLocksEffort && (
-                <select
+                <CustomSelect<EffortLevel>
                   value={session.effort}
                   disabled={isRunning}
-                  onChange={(e) => void updateSessionMeta(session.id, { effort: e.target.value as EffortLevel })}
-                  className="px-2 py-1 rounded-lg border text-xs outline-none cursor-pointer"
-                  style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg)', color: 'var(--text)' }}
+                  onChange={(val) => void updateSessionMeta(session.id, { effort: val })}
+                  preferredPlacement="top"
+                  menuMinWidth={200}
                   title="Mức suy luận (Reasoning Effort)"
-                >
-                  <option value="low" style={{ backgroundColor: 'var(--surface)' }}>Effort: Low</option>
-                  <option value="medium" style={{ backgroundColor: 'var(--surface)' }}>Effort: Medium</option>
-                  <option value="high" style={{ backgroundColor: 'var(--surface)' }}>Effort: High</option>
-                  <option value="max" style={{ backgroundColor: 'var(--surface)' }}>Effort: Max</option>
-                </select>
+                  icon={<Gauge className="w-3.5 h-3.5" style={{ color: 'var(--muted)' }} />}
+                  options={[
+                    { value: 'low', label: 'Effort: Low', description: 'Phản hồi nhanh, tiết kiệm token' },
+                    { value: 'medium', label: 'Effort: Medium', description: 'Cân bằng tốc độ và độ sâu' },
+                    { value: 'high', label: 'Effort: High', description: 'Phân tích kỹ bài toán phức tạp' },
+                    { value: 'max', label: 'Effort: Max', description: 'Suy luận tối đa' }
+                  ]}
+                />
               )}
+
+              <OrchestratorWidget />
             </div>
 
             {isRunning ? (
               <button
                 type="button"
                 onClick={() => void stopRun(session.id)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-white cursor-pointer"
+                className="ml-auto shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-white cursor-pointer"
                 style={{ backgroundColor: 'var(--err)' }}
               >
                 <Square className="w-3.5 h-3.5 fill-current" />
@@ -583,7 +699,7 @@ export function SmartComposer(): React.JSX.Element | null {
                 type="button"
                 disabled={sending || (!prompt.trim() && attachments.length === 0)}
                 onClick={() => void handleSend()}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold text-white cursor-pointer disabled:opacity-40 transition-opacity"
+                className="ml-auto shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold text-white cursor-pointer disabled:opacity-40 transition-opacity"
                 style={{ backgroundColor: 'var(--accent)' }}
               >
                 <ArrowUp className="w-3.5 h-3.5" />

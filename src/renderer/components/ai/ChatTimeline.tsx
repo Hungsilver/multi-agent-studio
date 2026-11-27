@@ -9,17 +9,20 @@ import {
   CopyPlus,
   FileCode2,
   GitBranch,
+  Minimize2,
   Paperclip,
   RotateCcw,
   Sparkles,
+  Workflow,
   Wrench
 } from 'lucide-react'
 import { PROVIDERS } from '@shared/constants/providers'
-import type { AiTurn, ToolCategory } from '@shared/types/ai'
+import type { AiTurn, ProviderId, ToolCategory } from '@shared/types/ai'
 import appAvatar from '../../assets/app-avatar.png'
 import { useAiStore } from '../../stores/useAiStore'
 import { useGitStore } from '../../stores/useGitStore'
 import { useSettingsStore } from '../../stores/useSettingsStore'
+import { useWorkspaceTabsStore } from '../../stores/useWorkspaceTabsStore'
 import { MessageMarkdown } from './MessageMarkdown'
 import { PlanReviewCard } from './PlanReviewCard'
 import { ToolActivityGroup, type ToolActivityItem } from './ToolActivityGroup'
@@ -29,9 +32,13 @@ type RenderBlock =
   | { kind: 'thinking'; text: string }
   | { kind: 'tools'; items: ToolActivityItem[] }
   | { kind: 'handoff'; summary: string; from: string; to: string }
-  | { kind: 'plan'; title: string }
+  | { kind: 'orchestrator'; phase: string; provider: ProviderId; model?: string; summary: string }
+  | { kind: 'compacted'; trigger: 'manual' | 'auto'; compactedTurnsCount: number; beforeTokens: number; afterTokens: number; thresholdPercent?: number }
+  | { kind: 'plan'; title: string; markdown: string; executorProvider?: ProviderId; executorModel?: string }
   | { kind: 'error'; message: string; hint?: string }
   | { kind: 'complete'; durationMs: number; inputTokens?: number; outputTokens?: number; costUsd?: number; isError: boolean; hint?: string }
+
+const turnBlocksCache = new WeakMap<AiTurn, RenderBlock[]>()
 
 function buildTurnBlocks(turn: AiTurn): RenderBlock[] {
   const blocks: RenderBlock[] = []
@@ -77,6 +84,25 @@ function buildTurnBlocks(turn: AiTurn): RenderBlock[] {
           summary: e.summary
         })
         break
+      case 'orchestrator.phase':
+        blocks.push({
+          kind: 'orchestrator',
+          phase: e.phase,
+          provider: e.provider,
+          model: e.model,
+          summary: e.summary
+        })
+        break
+      case 'context.compacted':
+        blocks.push({
+          kind: 'compacted',
+          trigger: e.trigger,
+          compactedTurnsCount: e.compactedTurnsCount,
+          beforeTokens: e.beforeTokens,
+          afterTokens: e.afterTokens,
+          thresholdPercent: e.thresholdPercent
+        })
+        break
       case 'thinking.delta':
         pushThinking(e.text)
         break
@@ -95,7 +121,13 @@ function buildTurnBlocks(turn: AiTurn): RenderBlock[] {
         break
       }
       case 'plan.proposed':
-        blocks.push({ kind: 'plan', title: e.title })
+        blocks.push({
+          kind: 'plan',
+          title: e.title,
+          markdown: e.markdown,
+          executorProvider: e.executorProvider,
+          executorModel: e.executorModel
+        })
         break
       case 'error':
         blocks.push({ kind: 'error', message: e.message, hint: e.hint })
@@ -170,15 +202,21 @@ const QUICK_STARTERS = [
   }
 ]
 
-export function ChatTimeline(): React.JSX.Element {
-  const detail = useAiStore((s) => s.activeDetail)
+interface ChatTimelineProps {
+  sessionId?: string
+  compact?: boolean
+  onFocusPane?: () => void
+}
+
+export function ChatTimeline({ sessionId, compact = false, onFocusPane }: ChatTimelineProps = {}): React.JSX.Element {
+  const detail = useAiStore((s) => (sessionId ? s.detailsBySessionId[sessionId] ?? null : s.activeDetail))
   const sendPrompt = useAiStore((s) => s.sendPrompt)
   const forkSession = useAiStore((s) => s.forkSession)
   const setDraft = useAiStore((s) => s.setDraft)
   const setInspectorOpen = useAiStore((s) => s.setInspectorOpen)
   const setInspectorTab = useAiStore((s) => s.setInspectorTab)
   const setSelectedTurnForDiff = useAiStore((s) => s.setSelectedTurnForDiff)
-  const selectSession = useAiStore((s) => s.selectSession)
+  const ensureSessionDetail = useAiStore((s) => s.ensureSessionDetail)
   const refreshWorking = useGitStore((s) => s.refreshWorking)
   const showToast = useSettingsStore((s) => s.showToast)
 
@@ -187,14 +225,33 @@ export function ChatTimeline(): React.JSX.Element {
 
   const turns = detail?.turns ?? []
   const session = detail?.session
+  const memory = detail?.memory
 
+  // Chỉ dựng lại block cho lượt thật sự đổi (lượt cũ giữ nguyên identity nên lấy từ cache)
   const renderedTurns = useMemo(
-    () => turns.map((t) => ({ turn: t, blocks: buildTurnBlocks(t) })),
+    () =>
+      turns.map((t) => {
+        let blocks = turnBlocksCache.get(t)
+        if (!blocks) {
+          blocks = buildTurnBlocks(t)
+          turnBlocksCache.set(t, blocks)
+        }
+        return { turn: t, blocks }
+      }),
     [turns]
   )
 
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const stickToBottomRef = useRef(true)
+  const handleScroll = (): void => {
+    const el = scrollRef.current
+    if (!el) return
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 96
+  }
+
+  // Tự cuộn xuống khi có nội dung mới — nhưng không giật lại nếu người dùng đã cuộn lên đọc phần trên
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    if (stickToBottomRef.current) bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
   }, [turns.length, turns[turns.length - 1]?.events.length])
 
   if (!session) return <div className="flex-1" />
@@ -205,18 +262,19 @@ export function ChatTimeline(): React.JSX.Element {
     try {
       await window.workspaceApi.restoreTurnCheckpoint(session.id, turnId)
       await refreshWorking(workDir)
-      await selectSession(session.id)
+      await ensureSessionDetail(session.id)
       showToast(`Đã khôi phục toàn bộ code về trước lượt #${turnIndex}`, 'ok')
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Khôi phục checkpoint thất bại', 'err')
     }
   }
 
-  const handleApprovePlan = async (): Promise<void> => {
+  const handleApprovePlan = async (executorProvider?: ProviderId, executorModel?: string): Promise<void> => {
     await sendPrompt({
       sessionId: session.id,
       prompt: 'Kế hoạch đã được duyệt. Hãy triển khai đầy đủ theo đúng kế hoạch vừa đề xuất và kiểm tra lại kết quả.',
-      permissionMode: 'edit'
+      permissionMode: 'edit',
+      ...(executorProvider ? { provider: executorProvider, model: executorModel } : {})
     })
   }
 
@@ -229,23 +287,28 @@ export function ChatTimeline(): React.JSX.Element {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-5">
+    <div
+      ref={scrollRef}
+      onScroll={handleScroll}
+      onMouseDown={() => onFocusPane?.()}
+      className={`flex-1 overflow-y-auto ${compact ? 'px-3.5 py-4' : 'px-6 py-5'}`}
+    >
       <div className="max-w-3xl mx-auto space-y-6">
         {renderedTurns.length === 0 && (
           <div className="py-10 text-center space-y-5">
             <img
               src={appAvatar}
-              alt="AI Coding Tool"
+              alt="Multi-Agent Studio"
               className="w-14 h-14 rounded-2xl mx-auto shadow-lg"
             />
             <div className="space-y-1.5">
               <h2 className="text-lg font-semibold">
-                AI Coding Tool · {PROVIDERS[session.provider].name}
+                Multi-Agent Studio · {PROVIDERS[session.provider].name}
               </h2>
               <p className="text-xs max-w-md mx-auto leading-relaxed" style={{ color: 'var(--muted)' }}>
                 Gõ <code className="px-1 py-0.5 rounded bg-subtle">@</code> để đính kèm file/diff,{' '}
                 <code className="px-1 py-0.5 rounded bg-subtle">/</code> để dùng Skill &amp; Prompt mẫu, hoặc{' '}
-                <code className="px-1 py-0.5 rounded bg-subtle">Ctrl+V</code> dán ảnh lỗi UI. Đổi qua lại Claude, Codex, AGY, Gemini bất cứ lúc nào giữ 100% ngữ cảnh.
+                <code className="px-1 py-0.5 rounded bg-subtle">Ctrl+V</code> dán ảnh lỗi UI. Đổi qua lại Claude, Codex, Antigravity (AGY) bất cứ lúc nào giữ 100% ngữ cảnh.
               </p>
             </div>
 
@@ -277,6 +340,8 @@ export function ChatTimeline(): React.JSX.Element {
         {renderedTurns.map(({ turn, blocks }) => {
           const provMeta = PROVIDERS[turn.provider]
           const hasText = Boolean(getTurnPlainText(turn))
+          const isTurnComplete = blocks.some((b) => b.kind === 'complete')
+          const isTurnRunning = turn.status === 'running' && session.status === 'running' && !isTurnComplete
           return (
             <div key={turn.id} className="space-y-3 group/turn">
               {/* User Bubble */}
@@ -308,18 +373,18 @@ export function ChatTimeline(): React.JSX.Element {
 
               {/* Assistant Response */}
               <div className="space-y-2 pl-1">
-                <div className="flex items-center justify-between text-[11px]" style={{ color: 'var(--muted)' }}>
-                  <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: provMeta.color }} />
-                    <span className="font-semibold" style={{ color: 'var(--text)' }}>
-                      {provMeta.name}
+                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px]" style={{ color: 'var(--muted)' }}>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: provMeta.color }} />
+                    <span className="font-semibold shrink-0" style={{ color: 'var(--text)' }}>
+                      {compact ? provMeta.shortName : provMeta.name}
                     </span>
-                    <span>· Lượt #{turn.turnIndex}</span>
-                    {turn.model && <span>· {turn.model}</span>}
+                    <span className="shrink-0">· #{turn.turnIndex}</span>
+                    {turn.model && !compact && <span className="truncate">· {turn.model}</span>}
                   </div>
 
-                  {turn.status !== 'running' && (
-                    <div className="flex items-center gap-2.5">
+                  {!isTurnRunning && (
+                    <div className="flex items-center gap-2.5 shrink-0">
                       {hasText && (
                         <button
                           type="button"
@@ -328,7 +393,7 @@ export function ChatTimeline(): React.JSX.Element {
                           title="Sao chép câu trả lời"
                         >
                           {copiedTurnId === turn.id ? <Check className="w-3 h-3" style={{ color: 'var(--ok)' }} /> : <Copy className="w-3 h-3" />}
-                          <span>{copiedTurnId === turn.id ? 'Đã chép' : 'Chép'}</span>
+                          <span className={compact ? 'hidden' : undefined}>{copiedTurnId === turn.id ? 'Đã chép' : 'Chép'}</span>
                         </button>
                       )}
                       <button
@@ -338,7 +403,7 @@ export function ChatTimeline(): React.JSX.Element {
                         title="Rẽ nhánh thành phiên mới từ lượt này"
                       >
                         <CopyPlus className="w-3 h-3" />
-                        <span>Fork</span>
+                        <span className={compact ? 'hidden' : undefined}>Fork</span>
                       </button>
                       {turn.preTreeHash && (
                         <>
@@ -353,7 +418,7 @@ export function ChatTimeline(): React.JSX.Element {
                             style={{ color: 'var(--info)' }}
                           >
                             <FileCode2 className="w-3 h-3" />
-                            <span>Xem Diff</span>
+                            <span className={compact ? 'hidden' : undefined}>Xem Diff</span>
                           </button>
                           <button
                             type="button"
@@ -363,7 +428,7 @@ export function ChatTimeline(): React.JSX.Element {
                             title="Hoàn tác toàn bộ thay đổi code của lượt này"
                           >
                             <RotateCcw className="w-3 h-3" />
-                            <span>Hoàn tác lượt</span>
+                            <span className={compact ? 'hidden' : undefined}>Hoàn tác lượt</span>
                           </button>
                         </>
                       )}
@@ -390,6 +455,51 @@ export function ChatTimeline(): React.JSX.Element {
                       </div>
                     )
                   }
+                  if (blk.kind === 'orchestrator') {
+                    const pMeta = PROVIDERS[blk.provider]
+                    return (
+                      <div
+                        key={i}
+                        data-orchestrator-banner="true"
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg border text-xs"
+                        style={{
+                          backgroundColor: 'var(--accent-soft)',
+                          borderColor: 'color-mix(in srgb, var(--accent) 45%, transparent)',
+                          color: 'var(--text)'
+                        }}
+                      >
+                        <Workflow className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--accent)' }} />
+                        <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: pMeta.color }} />
+                        <span>
+                          <strong>Orchestrator:</strong> {blk.summary}
+                        </span>
+                      </div>
+                    )
+                  }
+                  if (blk.kind === 'compacted') {
+                    return (
+                      <div
+                        key={i}
+                        data-compacted-banner="true"
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg border text-xs"
+                        style={{
+                          backgroundColor: 'var(--surface)',
+                          borderColor: 'var(--border)',
+                          color: 'var(--muted)'
+                        }}
+                      >
+                        <Minimize2 className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--ok)' }} />
+                        <span>
+                          <strong style={{ color: 'var(--text)' }}>
+                            {blk.trigger === 'auto' ? 'Tự động nén ngữ cảnh' : 'Đã nén ngữ cảnh'}
+                          </strong>
+                          {blk.thresholdPercent ? ` (vượt ngưỡng ${blk.thresholdPercent}%)` : ''}: đã tóm gọn{' '}
+                          {blk.compactedTurnsCount} lượt ({blk.beforeTokens.toLocaleString()} →{' '}
+                          {blk.afterTokens.toLocaleString()} token).
+                        </span>
+                      </div>
+                    )
+                  }
                   if (blk.kind === 'thinking') {
                     return (
                       <details
@@ -408,18 +518,36 @@ export function ChatTimeline(): React.JSX.Element {
                     )
                   }
                   if (blk.kind === 'tools') {
-                    return <ToolActivityGroup key={i} items={blk.items} />
+                    return <ToolActivityGroup key={i} items={blk.items} workspacePath={workDir} />
                   }
                   if (blk.kind === 'markdown') {
-                    return <MessageMarkdown key={i} content={blk.text} />
+                    return <MessageMarkdown key={i} content={blk.text} workspacePath={workDir} />
                   }
                   if (blk.kind === 'plan') {
+                    const fallbackMd = blocks
+                      .filter((b): b is { kind: 'markdown'; text: string } => b.kind === 'markdown')
+                      .map((b) => b.text)
+                      .join('\n\n')
+                    const planCode = blk.markdown?.trim() || fallbackMd || `# ${blk.title}`
                     return (
                       <PlanReviewCard
                         key={i}
                         title={blk.title}
                         disabled={session.status === 'running'}
-                        onApproveAndExecute={() => void handleApprovePlan()}
+                        executorLabel={blk.executorProvider ? PROVIDERS[blk.executorProvider].shortName : undefined}
+                        onOpenPlan={() =>
+                          useWorkspaceTabsStore.getState().openInspectorTab({
+                            kind: 'artifact',
+                            title: blk.title || 'Kế hoạch (Plan)',
+                            workspacePath: workDir,
+                            artifact: {
+                              language: 'markdown',
+                              title: blk.title || 'Kế hoạch (Plan)',
+                              code: planCode
+                            }
+                          })
+                        }
+                        onApproveAndExecute={() => void handleApprovePlan(blk.executorProvider, blk.executorModel)}
                       />
                     )
                   }
@@ -468,10 +596,25 @@ export function ChatTimeline(): React.JSX.Element {
                   return null
                 })}
 
-                {turn.status === 'running' && (
+                {isTurnRunning && (
                   <RunningElapsedLabel startIso={turn.createdAt} providerName={provMeta.name} />
                 )}
               </div>
+
+              {memory && memory.compactedUpToTurnIndex > 0 && turn.turnIndex === memory.compactedUpToTurnIndex && (
+                <div
+                  data-compacted-divider="true"
+                  className="flex items-center gap-2 pt-3 text-[10.5px]"
+                  style={{ color: 'var(--muted)' }}
+                >
+                  <span className="flex-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface)' }}>
+                    <Minimize2 className="w-3 h-3" style={{ color: 'var(--ok)' }} />
+                    Đã nén ngữ cảnh tới lượt #{memory.compactedUpToTurnIndex} vào Session Memory
+                  </span>
+                  <span className="flex-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
+                </div>
+              )}
             </div>
           )
         })}

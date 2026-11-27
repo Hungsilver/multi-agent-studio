@@ -3,24 +3,42 @@ import os from 'node:os'
 import path from 'node:path'
 import type { McpServerInfo, RuleFile, SkillItem } from '@shared/types/governance'
 import { getDefaultDataDir } from '../storage/database'
+import { BUNDLED_SKILLS } from './bundled-skills'
 
-function parseFrontmatter(raw: string): { name: string; description: string; tags: string[]; body: string } {
+export function parseFrontmatter(raw: string): { name: string; description: string; tags: string[]; body: string } {
   const normalized = raw.replace(/\r\n/g, '\n')
   const match = normalized.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/)
   if (!match) {
     return { name: '', description: '', tags: [], body: normalized.trim() }
   }
-  const yaml = match[1]
+  const yamlLines = match[1].split('\n')
   const body = match[2].trim()
   let name = ''
   let description = ''
   let tags: string[] = []
 
-  for (const line of yaml.split('\n')) {
-    const kv = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/)
+  for (let i = 0; i < yamlLines.length; i++) {
+    const kv = yamlLines[i].match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/)
     if (!kv) continue
     const k = kv[1].toLowerCase()
-    const v = kv[2].trim().replace(/^["']|["']$/g, '')
+    const rawVal = kv[2].trim()
+
+    let resolvedVal = rawVal
+    if (/^[>|][+-]?$/.test(rawVal)) {
+      const folded = rawVal.startsWith('>')
+      const blockLines: string[] = []
+      while (i + 1 < yamlLines.length && (/^\s+\S/.test(yamlLines[i + 1]) || yamlLines[i + 1].trim() === '')) {
+        i += 1
+        const nextLine = yamlLines[i]
+        if (nextLine.trim() === '' && i + 1 < yamlLines.length && !/^\s+/.test(yamlLines[i + 1])) {
+          break
+        }
+        blockLines.push(nextLine.trim())
+      }
+      resolvedVal = blockLines.filter(Boolean).join(folded ? ' ' : '\n')
+    }
+
+    const v = resolvedVal.replace(/^["']|["']$/g, '')
     if (k === 'name') name = v
     else if (k === 'description') description = v
     else if (k === 'tags') {
@@ -88,16 +106,73 @@ function scanSkillsRoot(
   return items
 }
 
+function collectInstalledClaudePluginSkillDirs(home: string): string[] {
+  const pluginsRoot = path.join(home, '.claude', 'plugins')
+  const installedFile = path.join(pluginsRoot, 'installed_plugins.json')
+  if (!fs.existsSync(installedFile)) return []
+
+  let enabledMap: Record<string, boolean> = {}
+  const settingsFile = path.join(home, '.claude', 'settings.json')
+  if (fs.existsSync(settingsFile)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(settingsFile, 'utf8')) as {
+        enabledPlugins?: Record<string, boolean>
+      }
+      enabledMap = parsed.enabledPlugins ?? {}
+    } catch {
+      // ignore
+    }
+  }
+
+  const dirs: string[] = []
+  try {
+    const parsed = JSON.parse(fs.readFileSync(installedFile, 'utf8')) as {
+      plugins?: Record<string, Array<{ installPath?: string }>>
+    }
+    for (const [pluginId, entries] of Object.entries(parsed.plugins ?? {})) {
+      if (enabledMap[pluginId] === false) continue
+      for (const entry of entries ?? []) {
+        if (!entry.installPath) continue
+        const skillsDir = path.join(entry.installPath, 'skills')
+        if (fs.existsSync(skillsDir)) dirs.push(skillsDir)
+      }
+    }
+  } catch {
+    // ignore malformed installed_plugins.json
+  }
+  return dirs
+}
+
+export function ensureDefaultSkills(appSkillsDir = path.join(getDefaultDataDir(), 'skills')): void {
+  try {
+    for (const spec of BUNDLED_SKILLS) {
+      const skillFile = path.join(appSkillsDir, spec.slug, 'SKILL.md')
+      if (!fs.existsSync(skillFile)) {
+        fs.mkdirSync(path.dirname(skillFile), { recursive: true })
+        fs.writeFileSync(skillFile, spec.content, 'utf8')
+      }
+    }
+  } catch {
+    // ignore write failures in restricted envs
+  }
+}
+
 export function listAllSkills(workspacePath?: string): SkillItem[] {
   const home = os.homedir()
   const appSkillsDir = path.join(getDefaultDataDir(), 'skills')
+  ensureDefaultSkills(appSkillsDir)
 
   const candidates: Array<{ dir: string; scope: 'workspace' | 'global'; source: SkillItem['source'] }> = [
-    { dir: appSkillsDir, scope: 'global', source: 'app' },
     { dir: path.join(home, '.claude', 'skills'), scope: 'global', source: 'claude' },
     { dir: path.join(home, '.agents', 'skills'), scope: 'global', source: 'agents' },
-    { dir: path.join(home, '.gemini', 'skills'), scope: 'global', source: 'gemini' }
+    { dir: path.join(home, '.codex', 'skills'), scope: 'global', source: 'agents' },
+    { dir: path.join(home, '.gemini', 'skills'), scope: 'global', source: 'gemini' },
+    { dir: appSkillsDir, scope: 'global', source: 'app' }
   ]
+
+  for (const pluginSkillsDir of collectInstalledClaudePluginSkillDirs(home)) {
+    candidates.push({ dir: pluginSkillsDir, scope: 'global', source: 'plugin' })
+  }
 
   if (workspacePath && fs.existsSync(workspacePath)) {
     candidates.unshift(
@@ -109,11 +184,15 @@ export function listAllSkills(workspacePath?: string): SkillItem[] {
 
   const all: SkillItem[] = []
   const seenPaths = new Set<string>()
+  const seenByScopeAndName = new Set<string>()
   for (const c of candidates) {
     for (const item of scanSkillsRoot(c.dir, c.scope, c.source)) {
-      const key = path.resolve(item.filePath).toLowerCase()
-      if (seenPaths.has(key)) continue
-      seenPaths.add(key)
+      const pathKey = path.resolve(item.filePath).toLowerCase()
+      if (seenPaths.has(pathKey)) continue
+      const nameKey = `${item.scope}:${item.name.toLowerCase()}`
+      if (seenByScopeAndName.has(nameKey)) continue
+      seenPaths.add(pathKey)
+      seenByScopeAndName.add(nameKey)
       all.push(item)
     }
   }

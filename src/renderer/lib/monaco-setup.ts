@@ -23,6 +23,15 @@ export function ensureMonacoSetup(): void {
   }
 
   loader.config({ monaco })
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('unhandledrejection', (event) => {
+      const reason = event.reason as { name?: string; message?: string } | undefined
+      if (reason && reason.name === 'Canceled' && reason.message === 'Canceled') {
+        event.preventDefault()
+      }
+    })
+  }
 }
 
 export function detectMonacoLanguage(filePath: string): string {

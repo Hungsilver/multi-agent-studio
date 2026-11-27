@@ -6,6 +6,7 @@ import {
   deleteSkillFile,
   listAllSkills,
   listRuleFiles,
+  parseFrontmatter,
   saveRuleFileContent,
   saveSkillFile,
   syncAgentsRuleToTargets
@@ -60,5 +61,34 @@ describe('Governance: Skills & AGENTS.md', () => {
 
     const rules = listRuleFiles(ws).filter((r) => r.scope === 'workspace')
     expect(rules.find((r) => r.name === 'AGENTS.md')?.exists).toBe(true)
+  })
+
+  it('parses YAML folded multiline description (ponytail SKILL.md format) and discovers ponytail skill once', () => {
+    const raw = `---
+name: ponytail
+description: >
+  Lazy senior dev mode: the smallest change that fully solves the task,
+  and a reply a busy human understands.
+tags: [ponytail, yagni]
+argument-hint: "[lite|full|ultra|off]"
+license: MIT
+---
+
+# Ponytail Body
+Use YAGNI.`
+
+    const parsed = parseFrontmatter(raw)
+    expect(parsed.name).toBe('ponytail')
+    expect(parsed.description).toBe(
+      'Lazy senior dev mode: the smallest change that fully solves the task, and a reply a busy human understands.'
+    )
+    expect(parsed.tags).toEqual(['ponytail', 'yagni'])
+    expect(parsed.body).toContain('# Ponytail Body')
+
+    const skills = listAllSkills()
+    const ponytails = skills.filter((s) => s.name === 'ponytail' && s.scope === 'global')
+    expect(ponytails.length).toBe(1)
+    expect(ponytails[0].description.startsWith('>')).toBe(false)
+    expect(ponytails[0].description.length).toBeGreaterThan(20)
   })
 })

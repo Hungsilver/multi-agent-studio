@@ -12,11 +12,13 @@ export interface WorkspaceRecord {
 export interface AppSettings {
   theme: ThemeName
   accent: AccentName
-  defaultProvider: 'claude' | 'codex' | 'agy' | 'gemini'
+  defaultProvider: 'claude' | 'codex' | 'agy'
   defaultMode: 'plan' | 'edit' | 'full'
   claudeAuthMode: 'env' | 'account'
   notifications: boolean
-  cliOverrides: Partial<Record<'claude' | 'codex' | 'agy' | 'gemini', string>>
+  autoCompactEnabled: boolean
+  autoCompactThreshold: number
+  cliOverrides: Partial<Record<'claude' | 'codex' | 'agy', string>>
 }
 
 export interface PtyCreateOptions {
@@ -32,15 +34,6 @@ export interface PtySessionInfo {
   title: string
   cwd: string
   backend: 'conpty' | 'pipe'
-}
-
-export interface LegacyImportResult {
-  found: boolean
-  importedWorkspaces: number
-  importedSessions: number
-  theme?: ThemeName
-  accent?: AccentName
-  claudeAuthMode?: 'env' | 'account'
 }
 
 export interface AppVersionInfo {
@@ -61,4 +54,19 @@ export interface AppUpdateInfo {
   releaseNotes?: string
   commitsBehind?: number
   message: string
+}
+
+export interface FileTreeEntry {
+  name: string
+  relPath: string
+  isDir: boolean
+  size: number
+}
+
+export interface WorkspaceFileContent {
+  relPath: string
+  content: string
+  size: number
+  isBinary: boolean
+  tooLarge: boolean
 }

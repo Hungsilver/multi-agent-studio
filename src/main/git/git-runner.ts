@@ -110,7 +110,7 @@ export function runGit(
 export async function runGitChecked(
   cwd: string,
   args: string[],
-  options: { timeoutMs?: number; env?: NodeJS.ProcessEnv } = {}
+  options: { timeoutMs?: number; env?: NodeJS.ProcessEnv; stdin?: string } = {}
 ): Promise<string> {
   const res = await runGit(cwd, args, options)
   if (res.code !== 0) {

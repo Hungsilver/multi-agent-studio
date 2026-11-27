@@ -8,7 +8,7 @@ import { THEMES } from '@shared/constants/themes'
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import { useTerminalStore } from '../../stores/useTerminalStore'
 
-function XTermInstance({ ptyId }: { ptyId: string }): React.JSX.Element {
+export function XTermInstance({ ptyId }: { ptyId: string }): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const themeName = useSettingsStore((s) => s.settings.theme)
 

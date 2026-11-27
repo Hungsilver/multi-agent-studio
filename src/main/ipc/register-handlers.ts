@@ -1,16 +1,16 @@
-import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { PROVIDERS } from '@shared/constants/providers'
 import type { AiAttachment, ProviderId } from '@shared/types/ai'
-import type { FileChange } from '@shared/types/git'
+import type { FileChange, GitGraphQuery, HunkAction, ResetMode } from '@shared/types/git'
 import type { PromptTemplate } from '@shared/types/governance'
 import type { CreateSessionRequest, SendPromptRequest } from '@shared/types/ipc'
 import type { AppSettings, PtyCreateOptions } from '@shared/types/workspace'
 import { getProviderAdapter } from '../ai/adapters/registry'
 import { inspectAllClis, resolveCliCommand } from '../ai/cli-locator'
 import { compactSessionMemoryFromTurns } from '../ai/context-memory'
+import { resolveSessionWorkDir } from '../ai/session-workdir'
 import {
   deleteSkillFile,
   listAllSkills,
@@ -21,12 +21,15 @@ import {
   syncAgentsRuleToTargets
 } from '../ai/governance-service'
 import type { AgentOrchestrator } from '../ai/orchestrator'
+import { getProviderQuotas } from '../ai/quota-service'
 import { importClaudeHistoryIntoTurns } from '../ai/transcript-importer'
+import { listWorkspaceDirectory, readExternalPreviewFile, readWorkspaceFile, writeWorkspaceFile } from '../context/file-browser-service'
 import { saveClipboardImage, searchWorkspaceFiles } from '../context/workspace-indexer'
 import { restoreCheckpoint, restoreFileFromCheckpoint } from '../git/checkpoint-service'
 import {
   commitChanges,
   getFileDiff,
+  getLastCommitMessage,
   getRepoSummary,
   getTurnChangedFiles,
   getTurnFileDiff,
@@ -34,6 +37,30 @@ import {
   revertWorkingFile,
   stageFiles
 } from '../git/diff-service'
+import {
+  applyHunkPatch,
+  applyOrPopStash,
+  checkoutCommit,
+  cherryPickCommit,
+  continueOrAbortOperation,
+  createBranch,
+  createTag,
+  deleteBranch,
+  deleteTag,
+  dropStash,
+  fetchAll,
+  getRepoOperationState,
+  getStashDiff,
+  listStashes,
+  mergeBranchIntoCurrent,
+  pullCurrentBranch,
+  pushCurrentBranch,
+  rebaseCurrentOnto,
+  renameBranch,
+  resetToCommit,
+  revertCommit,
+  saveStash
+} from '../git/git-ops-service'
 import {
   createFlowBranch,
   getCommitDetail,
@@ -43,9 +70,36 @@ import {
   pushBranchForMr,
   switchBranch
 } from '../git/graph-service'
-import { createIsolatedWorktree, listWorktrees, mergeWorktreeBranch, removeWorktree } from '../git/worktree-service'
-import { importLegacyPegasusData } from '../storage/legacy-importer'
+import {
+  createIsolatedWorktree,
+  finalizeWorktreeMerge,
+  getMergeConflictStatus,
+  listWorktrees,
+  mergeWorktreeBranch,
+  prepareAndMergeWorktree,
+  removeWorktree,
+  resolveMergeConflictFile
+} from '../git/worktree-service'
+import type { AppsBatchAction, AppsCatalogConfig, DevAppConfig } from '@shared/types/apps'
+import {
+  addManualApp,
+  exportAppsCatalogToFile,
+  importAppsCatalogFromFile,
+  readAppsConfig,
+  removeAppsFromCatalog,
+  removeAppsProfile,
+  restoreAppsFromRemoved,
+  saveAppsProfile,
+  setAppsAutoRestart,
+  updateAppConfig,
+  writeAppsConfig
+} from '../apps/apps-store'
+import type { AppsManager } from '../apps/apps-manager'
+import { addIisSitesToCatalog, getIisSites, isIisInstalled } from '../apps/iis-service'
+import { stopPortOwner } from '../apps/process-inspector'
+import { scanAndUpdateAppsCatalog } from '../apps/project-scanner'
 import type { WorkspaceRepository } from '../storage/repositories'
+import { openInVsCode } from '../system/vscode-launcher'
 import { checkForAppUpdates, getAppRootDir, getAppVersionInfo } from '../system/update-service'
 import type { PtyManager } from '../terminal/pty-manager'
 
@@ -54,8 +108,9 @@ export function registerIpcHandlers(params: {
   repo: WorkspaceRepository
   orchestrator: AgentOrchestrator
   ptyManager: PtyManager
+  appsManager: AppsManager
 }): void {
-  const { getWindow, repo, orchestrator, ptyManager } = params
+  const { getWindow, repo, orchestrator, ptyManager, appsManager } = params
 
   // Window controls
   ipcMain.handle('window:minimize', () => getWindow()?.minimize())
@@ -68,10 +123,11 @@ export function registerIpcHandlers(params: {
   ipcMain.handle('window:close', () => getWindow()?.close())
   ipcMain.handle('dialog:pickFolder', async () => {
     const win = getWindow()
-    const res = await dialog.showOpenDialog(win ?? undefined!, {
-      properties: ['openDirectory'],
+    const opts = {
+      properties: ['openDirectory'] as Array<'openDirectory'>,
       title: 'Chọn thư mục workspace / dự án'
-    })
+    }
+    const res = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
     return res.canceled ? null : res.filePaths[0] ?? null
   })
   ipcMain.handle('os:openExplorer', async (_e, targetPath: string) => {
@@ -79,11 +135,7 @@ export function registerIpcHandlers(params: {
       await shell.openPath(targetPath)
     }
   })
-  ipcMain.handle('os:openVsCode', async (_e, targetPath: string) => {
-    if (targetPath && fs.existsSync(targetPath)) {
-      spawn('code.cmd', [targetPath], { shell: true, windowsHide: true, detached: true })
-    }
-  })
+  ipcMain.handle('os:openVsCode', (_e, targetPath: string) => openInVsCode(targetPath))
   ipcMain.handle('os:openExternal', async (_e, url: string) => {
     if (/^https?:\/\//i.test(url)) {
       await shell.openExternal(url)
@@ -96,7 +148,6 @@ export function registerIpcHandlers(params: {
   ipcMain.handle('workspaces:list', () => repo.listWorkspaces())
   ipcMain.handle('workspaces:add', (_e, folderPath: string) => repo.upsertWorkspace(folderPath))
   ipcMain.handle('workspaces:remove', (_e, id: string) => repo.removeWorkspace(id))
-  ipcMain.handle('legacy:import', () => importLegacyPegasusData(repo))
 
   // CLI Diagnostics
   ipcMain.handle('cli:statuses', (_e, forceRefresh?: boolean) => {
@@ -125,7 +176,7 @@ export function registerIpcHandlers(params: {
       : 'git pull --ff-only origin main; npm install; npm run build'
     const pty = ptyManager.create({
       cwd: appRoot,
-      title: 'Cập nhật AI Coding Tool',
+      title: 'Cập nhật Multi-Agent Studio',
       initialCommand: 'powershell.exe',
       args: ['-NoLogo', '-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', cmd]
     })
@@ -268,6 +319,9 @@ export function registerIpcHandlers(params: {
     const compacted = compactSessionMemoryFromTurns(cur, turns)
     return repo.updateMemory(sessionId, compacted)
   })
+  ipcMain.handle('ai:compactContext', (_e, sessionId: string) => {
+    return orchestrator.compactSessionContext(sessionId, 'manual')
+  })
 
   ipcMain.handle('ai:sendPrompt', (_e, req: SendPromptRequest) => orchestrator.sendPrompt(req))
   ipcMain.handle('ai:stopRun', (_e, sessionId: string) => orchestrator.stopRun(sessionId))
@@ -301,11 +355,20 @@ export function registerIpcHandlers(params: {
   })
 
   ipcMain.handle('ai:usageSummary', () => repo.getUsageSummary())
+  ipcMain.handle('ai:providerQuotas', (_e, forceRefresh?: boolean, agyReferenceCap5h?: number) =>
+    getProviderQuotas(repo, Boolean(forceRefresh), agyReferenceCap5h)
+  )
 
-  // Context
+  // Context & File Browser
   ipcMain.handle('context:searchFiles', (_e, dir: string, query: string) => searchWorkspaceFiles(dir, query))
   ipcMain.handle('context:saveClipboardImage', (_e, sessionId: string, dataUrl: string): AiAttachment => {
     return saveClipboardImage(sessionId, dataUrl)
+  })
+  ipcMain.handle('fs:listDir', (_e, rootDir: string, relDir?: string) => listWorkspaceDirectory(rootDir, relDir))
+  ipcMain.handle('fs:readFile', (_e, rootDir: string, relPath: string) => readWorkspaceFile(rootDir, relPath))
+  ipcMain.handle('fs:readExternalFile', (_e, absPath: string) => readExternalPreviewFile(absPath))
+  ipcMain.handle('fs:writeFile', (_e, rootDir: string, relPath: string, content: string) => {
+    return writeWorkspaceFile(rootDir, relPath, content)
   })
 
   // Governance
@@ -337,24 +400,32 @@ export function registerIpcHandlers(params: {
   ipcMain.handle('git:stage', (_e, dir: string, paths: string[], stage: boolean, all?: boolean) => {
     return stageFiles(dir, paths, stage, Boolean(all))
   })
-  ipcMain.handle('git:commit', (_e, dir: string, message: string) => commitChanges(dir, message))
+  ipcMain.handle('git:commit', (_e, dir: string, message: string, options?: { amend?: boolean }) => {
+    return commitChanges(dir, message, options)
+  })
+  ipcMain.handle('git:lastCommitMsg', (_e, dir: string) => getLastCommitMessage(dir))
   ipcMain.handle('git:revertFile', (_e, dir: string, change: FileChange) => revertWorkingFile(dir, change))
+  ipcMain.handle('git:applyHunk', (_e, dir: string, filePath: string, staged: boolean, action: HunkAction, hunkIndex: number) => {
+    return applyHunkPatch(dir, filePath, staged, action, hunkIndex)
+  })
   ipcMain.handle('git:restoreTurn', async (_e, sessionId: string, turnId: string) => {
     const session = repo.getSession(sessionId)
     const turn = repo.getTurn(turnId)
     if (!session || !turn || !turn.preTreeHash) throw new Error('Không có checkpoint cho lượt này')
-    const workDir = session.worktreePath && fs.existsSync(session.worktreePath) ? session.worktreePath : session.workspacePath
+    const workDir = resolveSessionWorkDir(session)
     await restoreCheckpoint(workDir, turn.preTreeHash)
   })
   ipcMain.handle('git:restoreTurnFile', async (_e, sessionId: string, turnId: string, filePath: string) => {
     const session = repo.getSession(sessionId)
     const turn = repo.getTurn(turnId)
     if (!session || !turn || !turn.preTreeHash) throw new Error('Không có checkpoint cho lượt này')
-    const workDir = session.worktreePath && fs.existsSync(session.worktreePath) ? session.worktreePath : session.workspacePath
+    const workDir = resolveSessionWorkDir(session)
     await restoreFileFromCheckpoint(workDir, turn.preTreeHash, filePath)
   })
   ipcMain.handle('git:branches', (_e, dir: string) => listBranches(dir))
-  ipcMain.handle('git:graph', (_e, dir: string, count?: number) => getCommitGraph(dir, count))
+  ipcMain.handle('git:graph', (_e, dir: string, countOrQuery?: number | GitGraphQuery) => {
+    return getCommitGraph(dir, countOrQuery)
+  })
   ipcMain.handle('git:commitDetail', (_e, dir: string, hash: string) => getCommitDetail(dir, hash))
   ipcMain.handle('git:commitFileDiff', (_e, dir: string, hash: string, filePath: string) => {
     return getCommitFileDiff(dir, hash, filePath)
@@ -366,13 +437,67 @@ export function registerIpcHandlers(params: {
     return createFlowBranch(dir, type, name, carry)
   })
   ipcMain.handle('git:pushForMr', (_e, dir: string) => pushBranchForMr(dir))
+  ipcMain.handle('git:opState', (_e, dir: string) => getRepoOperationState(dir))
+  ipcMain.handle('git:fetchAll', (_e, dir: string, prune?: boolean) => fetchAll(dir, prune))
+  ipcMain.handle('git:pullBranch', (_e, dir: string, options?: { rebase?: boolean }) => pullCurrentBranch(dir, options))
+  ipcMain.handle('git:pushBranch', (_e, dir: string, options?: { forceWithLease?: boolean; pushTags?: boolean }) => {
+    return pushCurrentBranch(dir, options)
+  })
+  ipcMain.handle('git:createBranch', (_e, dir: string, name: string, options?: { startPoint?: string; checkout?: boolean }) => {
+    return createBranch(dir, name, options)
+  })
+  ipcMain.handle('git:renameBranch', (_e, dir: string, oldName: string, newName: string) => renameBranch(dir, oldName, newName))
+  ipcMain.handle('git:deleteBranch', (_e, dir: string, name: string, force?: boolean) => deleteBranch(dir, name, force))
+  ipcMain.handle('git:mergeBranch', (_e, dir: string, sourceRef: string, options?: { noFastForward?: boolean }) => {
+    return mergeBranchIntoCurrent(dir, sourceRef, options)
+  })
+  ipcMain.handle('git:rebaseBranch', (_e, dir: string, targetRef: string) => rebaseCurrentOnto(dir, targetRef))
+  ipcMain.handle('git:continueOrAbortOp', (_e, dir: string, op: 'merge' | 'rebase' | 'cherry-pick' | 'revert', action: 'continue' | 'abort') => {
+    return continueOrAbortOperation(dir, op, action)
+  })
+  ipcMain.handle('git:listStashes', (_e, dir: string) => listStashes(dir))
+  ipcMain.handle('git:saveStash', (_e, dir: string, message?: string, includeUntracked?: boolean) => {
+    return saveStash(dir, message, includeUntracked)
+  })
+  ipcMain.handle('git:applyStash', (_e, dir: string, stashRef: string, pop?: boolean) => applyOrPopStash(dir, stashRef, Boolean(pop)))
+  ipcMain.handle('git:dropStash', (_e, dir: string, stashRef: string) => dropStash(dir, stashRef))
+  ipcMain.handle('git:stashDiff', (_e, dir: string, stashRef: string) => getStashDiff(dir, stashRef))
+  ipcMain.handle('git:createTag', (_e, dir: string, name: string, target?: string, message?: string) => {
+    return createTag(dir, name, target, message)
+  })
+  ipcMain.handle('git:deleteTag', (_e, dir: string, name: string) => deleteTag(dir, name))
+  ipcMain.handle('git:cherryPick', (_e, dir: string, hash: string) => cherryPickCommit(dir, hash))
+  ipcMain.handle('git:revertCommit', (_e, dir: string, hash: string) => revertCommit(dir, hash))
+  ipcMain.handle('git:resetCommit', (_e, dir: string, hash: string, mode: ResetMode) => resetToCommit(dir, hash, mode))
+  ipcMain.handle('git:checkoutCommit', (_e, dir: string, hash: string) => checkoutCommit(dir, hash))
   ipcMain.handle('git:listWorktrees', (_e, dir: string) => listWorktrees(dir))
-  ipcMain.handle('git:removeWorktree', (_e, repoRoot: string, worktreePath: string, deleteBranch?: boolean) => {
-    return removeWorktree(repoRoot, worktreePath, Boolean(deleteBranch))
+  ipcMain.handle('git:removeWorktree', (_e, repoRoot: string, worktreePath: string, deleteBranch?: boolean, force?: boolean) => {
+    return removeWorktree(repoRoot, worktreePath, Boolean(deleteBranch), Boolean(force))
   })
   ipcMain.handle('git:mergeWorktree', (_e, repoRoot: string, worktreeBranch: string) => {
     return mergeWorktreeBranch(repoRoot, worktreeBranch)
   })
+  ipcMain.handle(
+    'git:prepareMergeWorktree',
+    (
+      _e,
+      repoRoot: string,
+      worktreePath: string,
+      worktreeBranch: string,
+      options?: { autoCommitWorktree?: boolean; autoCommitMain?: boolean; commitMessage?: string }
+    ) => prepareAndMergeWorktree(repoRoot, worktreePath, worktreeBranch, options)
+  )
+  ipcMain.handle('git:getMergeConflicts', (_e, repoRoot: string) => getMergeConflictStatus(repoRoot))
+  ipcMain.handle(
+    'git:resolveMergeConflict',
+    (_e, repoRoot: string, filePath: string, strategy: 'ours' | 'theirs' | 'custom', customContent?: string) =>
+      resolveMergeConflictFile(repoRoot, filePath, strategy, customContent)
+  )
+  ipcMain.handle(
+    'git:finalizeMerge',
+    (_e, repoRoot: string, action: 'complete' | 'abort', commitMessage?: string) =>
+      finalizeWorktreeMerge(repoRoot, action, commitMessage)
+  )
 
   // PTY
   ipcMain.handle('pty:create', (_e, opts: PtyCreateOptions) => ptyManager.create(opts))
@@ -387,7 +512,7 @@ export function registerIpcHandlers(params: {
     if (!resolved) throw new Error(`Chưa cài đặt ${PROVIDERS[session.provider].name}`)
     const adapter = getProviderAdapter(session.provider)
     const cliArgs = adapter.buildInteractiveArgs(session.providerSessionId, session.model)
-    const workDir = session.worktreePath && fs.existsSync(session.worktreePath) ? session.worktreePath : session.workspacePath
+    const workDir = resolveSessionWorkDir(session)
 
     return ptyManager.create({
       cwd: workDir,
@@ -395,5 +520,85 @@ export function registerIpcHandlers(params: {
       initialCommand: resolved.file,
       args: [...resolved.argsPrefix, ...cliArgs]
     })
+  })
+
+  // Apps Studio
+  ipcMain.handle('apps:getConfig', () => readAppsConfig())
+  ipcMain.handle(
+    'apps:updateConfig',
+    (_e, patch: Partial<Pick<AppsCatalogConfig, 'scanRanges' | 'scanRoots' | 'showStats'>>) => {
+      const cur = readAppsConfig()
+      return writeAppsConfig({ ...cur, ...patch })
+    }
+  )
+  ipcMain.handle('apps:scan', (_e, roots?: string[]) => {
+    const targetRoots = roots && roots.length > 0 ? roots : readAppsConfig().scanRoots
+    return scanAndUpdateAppsCatalog(targetRoots)
+  })
+  ipcMain.handle('apps:list', (_e, includeStats?: boolean) => appsManager.listDevApps(includeStats))
+  ipcMain.handle('apps:add', (_e, input: Omit<DevAppConfig, 'id'> & { id?: string }) => addManualApp(input))
+  ipcMain.handle('apps:update', (_e, id: string, patch: Partial<Omit<DevAppConfig, 'id'>>) => updateAppConfig(id, patch))
+  ipcMain.handle('apps:remove', async (_e, ids: string[], stopRunning?: boolean) => {
+    const idSet = new Set(ids)
+    const removedPorts = readAppsConfig()
+      .apps.filter((a) => idSet.has(a.id) && a.port > 0)
+      .map((a) => a.port)
+
+    if (stopRunning) {
+      const stopRes = await appsManager.runBatchAction('stop', ids)
+      if (!stopRes.ok) {
+        throw new Error(stopRes.errors.join('; '))
+      }
+    }
+    for (const port of removedPorts) {
+      await appsManager.stopTunnel(port)
+    }
+    const res = removeAppsFromCatalog(ids)
+    return {
+      message: `Đã gỡ khỏi danh mục: ${res.removed.map((a) => a.name).join(', ')}`,
+      config: res.config
+    }
+  })
+  ipcMain.handle('apps:restore', (_e, ids: string[]) => restoreAppsFromRemoved(ids))
+  ipcMain.handle('apps:autoRestart', (_e, ids: string[], on: boolean) => setAppsAutoRestart(ids, on))
+  ipcMain.handle('apps:batch', (_e, action: AppsBatchAction, ids: string[]) => appsManager.runBatchAction(action, ids))
+  ipcMain.handle('apps:maintenance', (_e, id: string, task: 'npm-install' | 'dotnet-build', stopFirst?: boolean) =>
+    appsManager.runMaintenanceTask(id, task, Boolean(stopFirst))
+  )
+  ipcMain.handle('apps:getLog', (_e, id: string, tail?: number) => appsManager.getAppLog(id, tail))
+  ipcMain.handle('apps:clearLog', (_e, id: string) => appsManager.clearAppLog(id))
+  ipcMain.handle('apps:saveProfile', (_e, name: string, ids: string[]) => saveAppsProfile(name, ids))
+  ipcMain.handle('apps:removeProfile', (_e, name: string) => removeAppsProfile(name))
+  ipcMain.handle('apps:stopPort', (_e, port: number) => stopPortOwner(port))
+  ipcMain.handle('apps:iisInstalled', () => isIisInstalled())
+  ipcMain.handle('apps:listIis', () => getIisSites())
+  ipcMain.handle('apps:addIis', (_e, siteNames: string[]) => addIisSitesToCatalog(siteNames))
+  ipcMain.handle('apps:startTunnel', (_e, port: number, name: string) => appsManager.startTunnel(port, name))
+  ipcMain.handle('apps:stopTunnel', (_e, port: number) => appsManager.stopTunnel(port))
+  ipcMain.handle('apps:shareInfo', (_e, appName: string, group: string, port: number, url?: string) =>
+    appsManager.getShareInfo(appName, group, port, url)
+  )
+  ipcMain.handle('apps:exportDialog', async () => {
+    const win = getWindow()
+    const saveOpts = {
+      title: 'Xuất danh mục Ứng dụng (JSON)',
+      defaultPath: 'multi-agent-studio-apps.json',
+      filters: [{ name: 'Danh mục App (*.json)', extensions: ['json'] }]
+    }
+    const res = win ? await dialog.showSaveDialog(win, saveOpts) : await dialog.showSaveDialog(saveOpts)
+    if (res.canceled || !res.filePath) return null
+    const out = exportAppsCatalogToFile(res.filePath)
+    return `Đã xuất ${out.appCount} app, ${out.profileCount} bộ ra ${res.filePath}`
+  })
+  ipcMain.handle('apps:importDialog', async () => {
+    const win = getWindow()
+    const openOpts = {
+      title: 'Nhập danh mục Ứng dụng (JSON)',
+      properties: ['openFile'] as Array<'openFile'>,
+      filters: [{ name: 'Danh mục App (*.json)', extensions: ['json'] }]
+    }
+    const res = win ? await dialog.showOpenDialog(win, openOpts) : await dialog.showOpenDialog(openOpts)
+    if (res.canceled || !res.filePaths[0]) return null
+    return importAppsCatalogFromFile(res.filePaths[0])
   })
 }

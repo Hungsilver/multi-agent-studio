@@ -1,12 +1,12 @@
 {
-  "name": "ai-coding-tool",
+  "name": "multi-agent-studio",
   "version": "1.0.0",
-  "description": "AI Coding Tool — Multi-Agent AI Coding Studio",
+  "description": "Multi-Agent Studio — Windows Desktop Studio for Multi-Agent AI Coding, Git & Dev Apps",
   "author": "Truong Duy Hung",
-  "homepage": "https://github.com/Hungsilver/ai-coding-tool",
+  "homepage": "https://github.com/Hungsilver/multi-agent-studio",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Hungsilver/ai-coding-tool.git"
+    "url": "https://github.com/Hungsilver/multi-agent-studio.git"
   },
   "private": true,
   "main": "./out/main/index.js",
@@ -17,7 +17,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "dist:dir": "npm run build && electron-builder --win --dir --publish never",
-    "dist:win": "npm run build && electron-builder --win --publish never"
+    "dist:win": "npm run build && electron-builder --win --publish never",
+    "e2e": "node tests/e2e/launch.mjs"
   },
   "dependencies": {
     "@lydell/node-pty": "^1.1.0",
@@ -26,6 +27,7 @@
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
     "lucide-react": "^0.487.0",
+    "mermaid": "^12.3.0",
     "monaco-editor": "^0.52.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

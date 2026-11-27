@@ -31,8 +31,26 @@ async function getSqlStatic(): Promise<SqlJsStatic> {
 }
 
 export function getDefaultDataDir(): string {
+  const custom = process.env.MULTI_AGENT_STUDIO_DATA || process.env.AI_CODING_TOOL_DATA
+  if (custom) return custom
   const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
-  return process.env.AI_CODING_TOOL_DATA || path.join(appData, 'AiCodingTool')
+  const targetDir = path.join(appData, 'MultiAgentStudio')
+  const prevDir = path.join(appData, 'AiCodingTool')
+  if (!fs.existsSync(targetDir) && fs.existsSync(prevDir)) {
+    try {
+      fs.mkdirSync(targetDir, { recursive: true })
+      for (const fileName of ['workspace.db', 'apps.json']) {
+        const src = path.join(prevDir, fileName)
+        const dst = path.join(targetDir, fileName)
+        if (fs.existsSync(src) && !fs.existsSync(dst)) {
+          fs.copyFileSync(src, dst)
+        }
+      }
+    } catch {
+      // ignore non-fatal upgrade copy error
+    }
+  }
+  return targetDir
 }
 
 export class WorkspaceDatabase {
@@ -110,6 +128,7 @@ export class WorkspaceDatabase {
         pinned_notes_json TEXT NOT NULL DEFAULT '[]',
         key_files_json TEXT NOT NULL DEFAULT '[]',
         active_skills_json TEXT NOT NULL DEFAULT '[]',
+        compacted_up_to_turn_index INTEGER NOT NULL DEFAULT 0,
         updated_at TEXT NOT NULL
       );
 
@@ -155,6 +174,11 @@ export class WorkspaceDatabase {
         value_json TEXT NOT NULL
       );
     `)
+    try {
+      this.db.run('ALTER TABLE session_memories ADD COLUMN compacted_up_to_turn_index INTEGER NOT NULL DEFAULT 0')
+    } catch {
+      // column already exists
+    }
   }
 
   private seedDefaults(): void {

@@ -1,19 +1,26 @@
 import { useEffect, useState } from 'react'
-import { Check, GitCommit, GitMerge, Maximize2, RefreshCw, RotateCcw, Sparkles, Trash2, X } from 'lucide-react'
+import { Check, FileCode2, GitCommit, GitMerge, Maximize2, RefreshCw, RotateCcw, Sparkles, Trash2, X } from 'lucide-react'
 import type { FileChange } from '@shared/types/git'
 import { THEMES } from '@shared/constants/themes'
 import { detectMonacoLanguage } from '../../lib/monaco-setup'
 import { useAiStore } from '../../stores/useAiStore'
-import { useGitStore } from '../../stores/useGitStore'
+import { normalizeGitDirKey, useGitStore } from '../../stores/useGitStore'
 import { useSettingsStore } from '../../stores/useSettingsStore'
+import { useWorkspaceTabsStore } from '../../stores/useWorkspaceTabsStore'
+import { CustomSelect } from '../common/CustomSelect'
 import { MonacoDiffView } from '../common/MonacoDiffView'
+import { removeWorktreeWithConfirm } from '../../lib/worktree-actions'
 
-export function ChangesInspector(): React.JSX.Element | null {
+interface ChangesInspectorProps {
+  onRequestWorktreeMerge?: (sessionId: string, repoRoot: string, worktreePath: string, worktreeBranch: string) => void
+}
+
+export function ChangesInspector({ onRequestWorktreeMerge }: ChangesInspectorProps = {}): React.JSX.Element | null {
   const detail = useAiStore((s) => s.activeDetail)
   const selectedTurnForDiff = useAiStore((s) => s.selectedTurnForDiff)
   const setSelectedTurnForDiff = useAiStore((s) => s.setSelectedTurnForDiff)
 
-  const summary = useGitStore((s) => s.summary)
+  const summaryByDir = useGitStore((s) => s.summaryByDir)
   const changes = useGitStore((s) => s.changes)
   const activeDiff = useGitStore((s) => s.activeDiff)
   const refreshWorking = useGitStore((s) => s.refreshWorking)
@@ -31,7 +38,12 @@ export function ChangesInspector(): React.JSX.Element | null {
 
   const session = detail?.session
   const workDir = session ? session.worktreePath || session.workspacePath : ''
+  const summary = workDir ? summaryByDir[normalizeGitDirKey(workDir)] ?? null : null
   const selectedTurn = detail?.turns.find((t) => t.id === selectedTurnForDiff) ?? null
+
+  useEffect(() => {
+    clearDiff()
+  }, [workDir, clearDiff])
 
   useEffect(() => {
     if (workDir) {
@@ -76,6 +88,10 @@ export function ChangesInspector(): React.JSX.Element | null {
 
   const handleMergeWorktree = async (): Promise<void> => {
     if (!session.worktreeBranch) return
+    if (onRequestWorktreeMerge && session.worktreePath) {
+      onRequestWorktreeMerge(session.id, session.workspacePath, session.worktreePath, session.worktreeBranch)
+      return
+    }
     try {
       const msg = await window.workspaceApi.mergeWorktreeToCurrent(session.workspacePath, session.worktreeBranch)
       showToast(msg, 'ok')
@@ -118,24 +134,30 @@ export function ChangesInspector(): React.JSX.Element | null {
           </button>
         </div>
 
-        <select
+        <CustomSelect<string>
           value={selectedTurnForDiff ?? ''}
-          onChange={(e) => {
+          onChange={(val) => {
             clearDiff()
-            setSelectedTurnForDiff(e.target.value || null)
+            setSelectedTurnForDiff(val || null)
           }}
-          className="w-full px-2 py-1 rounded-lg border text-xs outline-none"
-          style={{ backgroundColor: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
-        >
-          <option value="">Tất cả thay đổi hiện tại (Working Tree)</option>
-          {(detail?.turns ?? [])
-            .filter((t) => Boolean(t.preTreeHash))
-            .map((t) => (
-              <option key={t.id} value={t.id}>
-                Chỉ lượt #{t.turnIndex}: {t.userPrompt.slice(0, 32)}
-              </option>
-            ))}
-        </select>
+          className="w-full"
+          menuMinWidth={280}
+          title="Chọn phạm vi xem Diff"
+          options={[
+            {
+              value: '',
+              label: 'Tất cả thay đổi hiện tại (Working Tree)',
+              description: 'So sánh toàn bộ thay đổi chưa commit với HEAD'
+            },
+            ...(detail?.turns ?? [])
+              .filter((t) => Boolean(t.preTreeHash))
+              .map((t) => ({
+                value: t.id,
+                label: `Chỉ lượt #${t.turnIndex}: ${t.userPrompt.slice(0, 32)}`,
+                badge: t.preTreeHash?.slice(0, 6)
+              }))
+          ]}
+        />
 
         {session.worktreeBranch && (
           <div className="flex gap-1.5">
@@ -152,8 +174,8 @@ export function ChangesInspector(): React.JSX.Element | null {
               type="button"
               onClick={() => {
                 if (session.worktreePath && window.confirm('Xóa Worktree này?')) {
-                  void window.workspaceApi.removeWorktree(session.workspacePath, session.worktreePath, false).then(() => {
-                    showToast('Đã xóa Worktree', 'ok')
+                  void removeWorktreeWithConfirm(session.workspacePath, session.worktreePath, false).then((removed) => {
+                    if (removed) showToast('Đã xóa Worktree', 'ok')
                   })
                 }
               }}
@@ -208,6 +230,26 @@ export function ChangesInspector(): React.JSX.Element | null {
                   <span title="Đã stage">
                     <Check className="w-3 h-3" style={{ color: 'var(--ok)' }} />
                   </span>
+                )}
+                {c.code !== 'D' && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      const fileName = c.path.split(/[\\/]/).pop() || c.path
+                      useWorkspaceTabsStore.getState().openInspectorTab({
+                        kind: 'file-viewer',
+                        title: fileName,
+                        filePath: c.path.replace(/\\/g, '/'),
+                        workspacePath: workDir
+                      })
+                    }}
+                    className="opacity-0 group-hover:opacity-100 p-0.5 rounded btn-ghost"
+                    style={{ color: 'var(--info)' }}
+                    title="Mở file trong Inspector Editor"
+                  >
+                    <FileCode2 className="w-3 h-3" />
+                  </button>
                 )}
                 <button
                   type="button"

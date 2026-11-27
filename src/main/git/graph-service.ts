@@ -1,5 +1,5 @@
-import type { BranchInfo, CommitDetail, CommitNode, DiffResult, GraphSegment } from '@shared/types/git'
-import { getRepoRoot, runGit, runGitChecked } from './git-runner'
+import type { BranchInfo, CommitDetail, CommitNode, DiffResult, GitGraphQuery, GraphSegment } from '@shared/types/git'
+import { getRepoRoot, resolveSafeRepoPath, runGit, runGitChecked } from './git-runner'
 
 export async function listBranches(dir: string): Promise<BranchInfo[]> {
   const root = await getRepoRoot(dir)
@@ -28,10 +28,14 @@ export async function listBranches(dir: string): Promise<BranchInfo[]> {
   return items
 }
 
-export async function getCommitGraph(dir: string, count = 150): Promise<CommitNode[]> {
+export async function getCommitGraph(dir: string, countOrQuery: number | GitGraphQuery = 150): Promise<CommitNode[]> {
   const root = await getRepoRoot(dir)
   if (!root) return []
-  const res = await runGit(root, [
+
+  const query: GitGraphQuery = typeof countOrQuery === 'number' ? { count: countOrQuery } : countOrQuery
+  const count = Math.max(10, Math.min(1000, query.count ?? 150))
+
+  const args = [
     '-c',
     'core.quotePath=false',
     'log',
@@ -39,9 +43,55 @@ export async function getCommitGraph(dir: string, count = 150): Promise<CommitNo
     '--date=format:%d/%m/%Y %H:%M',
     '--pretty=format:%H%x1f%h%x1f%P%x1f%an%x1f%ad%x1f%D%x1f%s',
     '-n',
-    String(count),
-    '--all'
-  ])
+    String(count)
+  ]
+
+  if (query.firstParent) {
+    args.push('--first-parent')
+  }
+
+  const branchScope = (query.branch ?? '').trim()
+  if (!branchScope || branchScope === '__all__') {
+    args.push('--exclude=refs/stash', '--all')
+  } else if (branchScope === '__head__') {
+    args.push('HEAD')
+  } else if (/^[A-Za-z0-9._/-]+$/.test(branchScope) && !branchScope.startsWith('-') && !branchScope.includes('..')) {
+    args.push(branchScope)
+  } else {
+    args.push('--exclude=refs/stash', '--all')
+  }
+
+  const author = (query.author ?? '').trim()
+  if (author && !author.startsWith('-')) {
+    args.push(`--author=${author}`)
+  }
+
+  const search = (query.search ?? '').trim()
+  if (search && !search.startsWith('-')) {
+    if (/^[0-9a-f]{7,40}$/i.test(search)) {
+      // Check if commit hash exists; if so inspect history starting from or filtered cleanly
+      const verify = await runGit(root, ['rev-parse', '--verify', '--quiet', `${search}^{commit}`])
+      if (verify.code === 0) {
+        args.push(verify.stdout.trim())
+      } else {
+        args.push('--regexp-ignore-case', `--grep=${search}`)
+      }
+    } else {
+      args.push('--regexp-ignore-case', `--grep=${search}`)
+    }
+  }
+
+  const filePath = (query.filePath ?? '').trim()
+  if (filePath && !filePath.startsWith('-')) {
+    try {
+      resolveSafeRepoPath(root, filePath.replace(/\\/g, '/'))
+      args.push('--', filePath.replace(/\\/g, '/'))
+    } catch {
+      // ignore invalid path outside repo
+    }
+  }
+
+  const res = await runGit(root, args)
   if (res.code !== 0) return []
 
   const lanes: Array<string | null> = []

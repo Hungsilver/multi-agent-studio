@@ -4,6 +4,8 @@ import { app, BrowserWindow, Notification } from 'electron'
 import { PROVIDERS } from '@shared/constants/providers'
 import type { ProviderId } from '@shared/types/ai'
 import { AgentOrchestrator } from './ai/orchestrator'
+import { AppsManager } from './apps/apps-manager'
+import { cleanupOldAppLogs } from './apps/apps-store'
 import { registerIpcHandlers } from './ipc/register-handlers'
 import { WorkspaceDatabase } from './storage/database'
 import { WorkspaceRepository } from './storage/repositories'
@@ -13,6 +15,7 @@ let mainWindow: BrowserWindow | null = null
 let db: WorkspaceDatabase | null = null
 let orchestrator: AgentOrchestrator | null = null
 let ptyManager: PtyManager | null = null
+let appsManager: AppsManager | null = null
 
 function resolveAppIcon(): string | undefined {
   const candidates = [
@@ -27,9 +30,9 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
-    minWidth: 1060,
-    minHeight: 680,
-    title: 'AI Coding Tool',
+    minWidth: 760,
+    minHeight: 540,
+    title: 'Multi-Agent Studio',
     frame: false,
     titleBarStyle: 'hidden',
     backgroundColor: '#0E1117',
@@ -39,7 +42,8 @@ function createWindow(): void {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      webviewTag: true
     }
   })
 
@@ -58,11 +62,16 @@ function createWindow(): void {
   }
 }
 
-const gotLock = app.requestSingleInstanceLock()
+const customDataDir = process.env.MULTI_AGENT_STUDIO_DATA || process.env.AI_CODING_TOOL_DATA
+if (customDataDir) {
+  app.setPath('userData', customDataDir)
+}
+
+const gotLock = process.env.AICT_E2E_SCRIPT ? true : app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
 } else {
-  app.setAppUserModelId('AiCodingTool.Desktop')
+  app.setAppUserModelId('MultiAgentStudio.Desktop')
 
   app.on('second-instance', () => {
     if (mainWindow) {
@@ -71,13 +80,31 @@ if (!gotLock) {
     }
   })
 
+  // Bảo mật thẻ <webview> dùng cho Live Web Preview: luôn chạy sandboxed, không preload/nodeIntegration
+  app.on('web-contents-created', (_event, contents) => {
+    contents.on('will-attach-webview', (event, webPreferences, params) => {
+      delete webPreferences.preload
+      webPreferences.nodeIntegration = false
+      webPreferences.contextIsolation = true
+      webPreferences.sandbox = true
+
+      const targetSrc = (params.src || '').trim()
+      if (targetSrc && !/^(https?:\/\/|about:blank)/i.test(targetSrc)) {
+        event.preventDefault()
+      }
+    })
+  })
+
   app.whenReady().then(async () => {
     db = new WorkspaceDatabase()
     await db.init()
     const repo = new WorkspaceRepository(db)
+    repo.recoverInterruptedTurns()
 
     orchestrator = new AgentOrchestrator(repo)
     ptyManager = new PtyManager()
+    appsManager = new AppsManager()
+    cleanupOldAppLogs()
 
     const broadcast = (channel: string, payload: unknown): void => {
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -97,6 +124,17 @@ if (!gotLock) {
       }
     })
 
+    appsManager.on('apps:alert', (payload) => {
+      broadcast('apps:alert', payload)
+      const settings = repo.getSettings()
+      if (settings.notifications && mainWindow && !mainWindow.isFocused() && Notification.isSupported()) {
+        new Notification({
+          title: payload.title,
+          body: payload.message
+        }).show()
+      }
+    })
+
     ptyManager.on('pty:data', (payload) => broadcast('pty:data', payload))
     ptyManager.on('pty:exit', (payload) => broadcast('pty:exit', payload))
 
@@ -104,7 +142,8 @@ if (!gotLock) {
       getWindow: () => mainWindow,
       repo,
       orchestrator,
-      ptyManager
+      ptyManager,
+      appsManager
     })
 
     createWindow()
@@ -127,6 +166,7 @@ if (!gotLock) {
 
   app.on('before-quit', async () => {
     await orchestrator?.stopAll()
+    await appsManager?.stopAllTunnels()
     ptyManager?.killAll()
     db?.close()
   })

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildHandoffPrompt } from '../src/main/ai/context-memory'
 import type { AiTurn, ProviderSyncState, SessionMemory } from '../src/shared/types/ai'
+import { applySessionStatusToTurns, applyStreamEventToTurns } from '../src/shared/utils/turn-state'
 
 function makeTurn(turnIndex: number, provider: 'claude' | 'codex' | 'agy', prompt: string, reply: string): AiTurn {
   return {
@@ -41,6 +42,7 @@ describe('Session Context Memory & Provider Handoff', () => {
     pinnedNotes: ['Không đổi chữ ký endpoint v1'],
     keyFiles: ['src/PaymentController.cs'],
     activeSkillIds: [],
+    compactedUpToTurnIndex: 0,
     updatedAt: new Date().toISOString()
   }
 
@@ -100,5 +102,34 @@ describe('Session Context Memory & Provider Handoff', () => {
     expect(res.compiledPrompt).not.toContain('Lượt #2')
     expect(res.compiledPrompt).toContain('Lượt #3 (trên codex)')
     expect(res.compiledPrompt).toContain('PaymentValidatorTests.cs')
+  })
+
+  it('immediately transitions running turn status on turn.complete and session idle fallback', () => {
+    const runningTurn: AiTurn = {
+      ...makeTurn(4, 'claude', 'bây giờ là mấy giờ', ''),
+      status: 'running',
+      durationMs: null,
+      inputTokens: null,
+      outputTokens: null,
+      costUsd: null,
+      events: []
+    }
+
+    const afterComplete = applyStreamEventToTurns([runningTurn], runningTurn.id, {
+      type: 'turn.complete',
+      durationMs: 4000,
+      inputTokens: 68910,
+      outputTokens: 137,
+      costUsd: 0.1574,
+      isError: false
+    })
+    expect(afterComplete[0].status).toBe('completed')
+    expect(afterComplete[0].durationMs).toBe(4000)
+
+    const afterIdleFallback = applySessionStatusToTurns([runningTurn], 'idle')
+    expect(afterIdleFallback[0].status).toBe('completed')
+
+    const afterErrorFallback = applySessionStatusToTurns([runningTurn], 'error')
+    expect(afterErrorFallback[0].status).toBe('error')
   })
 })

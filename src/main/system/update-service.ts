@@ -8,7 +8,7 @@ import type { AppUpdateInfo, AppVersionInfo } from '@shared/types/workspace'
 const execFileAsync = promisify(execFile)
 
 export const REPO_OWNER = 'Hungsilver'
-export const REPO_NAME = 'ai-coding-tool'
+export const REPO_NAME = 'multi-agent-studio'
 export const REPO_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}`
 export const RELEASES_URL = `${REPO_URL}/releases`
 
@@ -95,7 +95,7 @@ export async function checkForAppUpdates(): Promise<AppUpdateInfo> {
   try {
     const headers: Record<string, string> = {
       Accept: 'application/vnd.github+json',
-      'User-Agent': 'AI-Coding-Tool'
+      'User-Agent': 'Multi-Agent-Studio'
     }
     const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN
     if (token) {

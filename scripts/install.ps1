@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 $RootDir = Split-Path -Parent $PSScriptRoot
 Set-Location $RootDir
 
-Write-Host "=== Cài đặt AI Coding Tool từ mã nguồn ===" -ForegroundColor Cyan
+Write-Host "=== Cài đặt Multi-Agent Studio từ mã nguồn ===" -ForegroundColor Cyan
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
   throw "Không tìm thấy 'git'. Hãy cài Git for Windows trước."
@@ -56,7 +56,7 @@ if ($LASTEXITCODE -ne 0) { throw "npm run build thất bại." }
 if ($CreateShortcut) {
   Write-Host "[4/4] Tạo Desktop shortcut..." -ForegroundColor Yellow
   $desktop = [Environment]::GetFolderPath('Desktop')
-  $lnkPath = Join-Path $desktop "AI Coding Tool.lnk"
+  $lnkPath = Join-Path $desktop "Multi-Agent Studio.lnk"
   $ws = New-Object -ComObject WScript.Shell
   $sc = $ws.CreateShortcut($lnkPath)
   $sc.TargetPath = "cmd.exe"

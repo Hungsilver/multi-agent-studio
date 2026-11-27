@@ -1,36 +1,82 @@
 import { useEffect, useState } from 'react'
-import { GitBranch, GitCommit, Plus, RefreshCw, Send, Trash2 } from 'lucide-react'
+import {
+  Archive,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Download,
+  FolderPlus,
+  GitBranch,
+  RefreshCw,
+  Send,
+  Tag
+} from 'lucide-react'
 import { THEMES } from '@shared/constants/themes'
-import { detectMonacoLanguage } from '../../lib/monaco-setup'
+import type { CommitNode, MergeWorktreeResult } from '@shared/types/git'
+import { removeWorktreeWithConfirm } from '../../lib/worktree-actions'
 import { useAiStore } from '../../stores/useAiStore'
 import { useGitStore } from '../../stores/useGitStore'
 import { useSettingsStore } from '../../stores/useSettingsStore'
-import { MonacoDiffView } from '../common/MonacoDiffView'
+import { CustomSelect } from '../common/CustomSelect'
+import {
+  CreateBranchModal,
+  CreateTagModal,
+  PullPushModal,
+  RenameBranchModal,
+  ResetCommitModal,
+  SaveStashModal
+} from './GitDialogs'
+import { GitHistoryView } from './GitHistoryView'
+import { GitSidebar, type GitMainTab } from './GitSidebar'
+import { GitWorkingCopyView } from './GitWorkingCopyView'
+import { MergeConflictModal } from './MergeConflictModal'
 
-const LANE_COLORS = ['#6366F1', '#10A37F', '#3B82F6', '#F59E0B', '#EC4899', '#8B5CF6', '#14B8A6']
-
-export function GitWorkspace(): React.JSX.Element {
+export function GitWorkspace({ initialDir }: { initialDir?: string } = {}): React.JSX.Element {
   const workspaces = useSettingsStore((s) => s.workspaces)
+  const addWorkspace = useSettingsStore((s) => s.addWorkspace)
   const themeName = useSettingsStore((s) => s.settings.theme)
   const showToast = useSettingsStore((s) => s.showToast)
   const activeSession = useAiStore((s) => s.activeDetail?.session)
+  const sendPrompt = useAiStore((s) => s.sendPrompt)
 
   const summary = useGitStore((s) => s.summary)
   const changes = useGitStore((s) => s.changes)
   const branches = useGitStore((s) => s.branches)
   const worktrees = useGitStore((s) => s.worktrees)
+  const stashes = useGitStore((s) => s.stashes)
+  const opState = useGitStore((s) => s.opState)
   const commits = useGitStore((s) => s.commits)
+  const graphQuery = useGitStore((s) => s.graphQuery)
+  const selectedCommit = useGitStore((s) => s.selectedCommit)
+  const commitDetail = useGitStore((s) => s.commitDetail)
+  const commitFileDiff = useGitStore((s) => s.commitFileDiff)
+  const selectedStashDiff = useGitStore((s) => s.selectedStashDiff)
   const activeDiff = useGitStore((s) => s.activeDiff)
+  const selectedFile = useGitStore((s) => s.selectedFile)
+  const loading = useGitStore((s) => s.loading)
+
   const refreshFullRepo = useGitStore((s) => s.refreshFullRepo)
+  const setGraphQuery = useGitStore((s) => s.setGraphQuery)
+  const selectCommit = useGitStore((s) => s.selectCommit)
+  const openCommitFileDiff = useGitStore((s) => s.openCommitFileDiff)
+  const openStashDiff = useGitStore((s) => s.openStashDiff)
+  const clearStashDiff = useGitStore((s) => s.clearStashDiff)
   const openWorkingDiff = useGitStore((s) => s.openWorkingDiff)
 
   const [repoDir, setRepoDir] = useState(
-    activeSession?.worktreePath || activeSession?.workspacePath || workspaces[0]?.path || ''
+    initialDir || activeSession?.worktreePath || activeSession?.workspacePath || workspaces[0]?.path || ''
   )
-  const [flowOpen, setFlowOpen] = useState(false)
-  const [flowType, setFlowType] = useState<'feature' | 'fix' | 'bugfix' | 'hotfix'>('feature')
-  const [flowName, setFlowName] = useState('')
-  const [commitMsg, setCommitMsg] = useState('')
+  const [activeTab, setActiveTab] = useState<GitMainTab>('status')
+  const [fetching, setFetching] = useState(false)
+
+  // Modal states
+  const [createBranchTarget, setCreateBranchTarget] = useState<string | null>(null)
+  const [renameBranchTarget, setRenameBranchTarget] = useState<string | null>(null)
+  const [stashModalOpen, setStashModalOpen] = useState(false)
+  const [tagTarget, setTagTarget] = useState<string | null>(null)
+  const [resetTarget, setResetTarget] = useState<CommitNode | null>(null)
+  const [pullPushMode, setPullPushMode] = useState<'pull' | 'push' | null>(null)
+  const [conflictModalResult, setConflictModalResult] = useState<MergeWorktreeResult | null>(null)
+
   const isDark = THEMES[themeName]?.isDark ?? true
 
   useEffect(() => {
@@ -38,348 +84,563 @@ export function GitWorkspace(): React.JSX.Element {
   }, [repoDir, refreshFullRepo])
 
   useEffect(() => {
-    if (repoDir && changes.length > 0 && !activeDiff) {
+    if (repoDir && changes.length > 0 && !selectedFile) {
       void openWorkingDiff(repoDir, changes[0])
     }
-  }, [repoDir, changes, activeDiff, openWorkingDiff])
+  }, [repoDir, changes, selectedFile, openWorkingDiff])
 
-  const handleStage = async (pathStr: string, stage: boolean): Promise<void> => {
-    await window.workspaceApi.stageFiles(repoDir, [pathStr], stage, false)
-    await refreshFullRepo(repoDir)
+  useEffect(() => {
+    if (activeTab === 'history' && repoDir && commits.length > 0 && !selectedCommit && !selectedStashDiff) {
+      void selectCommit(repoDir, commits[0])
+    }
+  }, [activeTab, repoDir, commits, selectedCommit, selectedStashDiff, selectCommit])
+
+  const openConflictModalForRepo = async (sourceBranch: string, message: string): Promise<void> => {
+    const st = await window.workspaceApi.getMergeConflictStatus(repoDir)
+    setConflictModalResult({
+      status: 'conflict',
+      message,
+      repoRoot: summary?.root || repoDir,
+      sourceBranch,
+      targetBranch: summary?.branch || 'HEAD',
+      conflicts: st.conflicts
+    })
   }
 
-  const handleCommit = async (): Promise<void> => {
+  const runAction = async (fn: () => Promise<string | void>): Promise<void> => {
     try {
-      const msg = await window.workspaceApi.commitChanges(repoDir, commitMsg)
-      setCommitMsg('')
+      const msg = await fn()
       await refreshFullRepo(repoDir)
-      showToast(msg, 'ok')
+      if (msg) showToast(msg, 'ok')
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Commit lỗi', 'err')
+      showToast(err instanceof Error ? err.message : 'Thao tác Git thất bại', 'err')
     }
   }
 
-  const handlePushMr = async (): Promise<void> => {
+  const handleApplyStash = async (ref: string, pop: boolean): Promise<void> => {
     try {
-      const res = await window.workspaceApi.pushBranchForMr(repoDir)
-      showToast(res.message, 'ok')
-      if (res.mrUrl) {
-        void window.workspaceApi.openExternalUrl(res.mrUrl)
+      const res = await window.workspaceApi.applyOrPopGitStash(repoDir, ref, pop)
+      clearStashDiff()
+      await refreshFullRepo(repoDir)
+      if (!res.ok && res.conflicts?.length) {
+        await openConflictModalForRepo(ref, res.message)
+      } else {
+        showToast(res.message, 'ok')
       }
-      await refreshFullRepo(repoDir)
     } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Push lỗi', 'err')
-    }
-  }
-
-  const handleCreateFlow = async (): Promise<void> => {
-    try {
-      const msg = await window.workspaceApi.createFlowBranch(repoDir, flowType, flowName.trim(), true)
-      setFlowOpen(false)
-      setFlowName('')
-      await refreshFullRepo(repoDir)
-      showToast(msg, 'ok')
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Tạo nhánh lỗi', 'err')
+      showToast(err instanceof Error ? err.message : 'Lỗi thao tác Stash', 'err')
     }
   }
 
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-      {/* Toolbar */}
+      {/* SourceTree Top Action Toolbar */}
       <div
-        className="h-12 shrink-0 px-4 border-b flex items-center justify-between gap-3"
+        className="h-12 shrink-0 px-3 border-b flex items-center justify-between gap-2 overflow-x-auto"
         style={{ backgroundColor: 'var(--header)', borderColor: 'var(--border)' }}
       >
-        <div className="flex items-center gap-2.5">
-          <GitBranch className="w-4 h-4" style={{ color: 'var(--accent)' }} />
-          <select
+        <div className="flex items-center gap-2 shrink-0">
+          <GitBranch className="w-4 h-4 shrink-0" style={{ color: 'var(--accent)' }} />
+          <CustomSelect<string>
             value={repoDir}
-            onChange={(e) => setRepoDir(e.target.value)}
-            className="px-2.5 py-1.5 rounded-lg border text-xs outline-none max-w-[300px]"
-            style={{ backgroundColor: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+            onChange={setRepoDir}
+            className="max-w-[230px]"
+            menuMinWidth={280}
+            placeholder="(Chọn repository)"
+            options={workspaces.map((w) => ({
+              value: w.path,
+              label: w.name,
+              description: w.path
+            }))}
+          />
+          <button
+            type="button"
+            onClick={() =>
+              void addWorkspace().then((ws) => {
+                if (ws) setRepoDir(ws.path)
+              })
+            }
+            className="p-1.5 rounded-lg border btn-ghost cursor-pointer"
+            style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}
+            title="Thêm thư mục Git repository"
           >
-            {workspaces.map((w) => (
-              <option key={w.id} value={w.path}>
-                {w.name} — {w.path}
-              </option>
-            ))}
-          </select>
+            <FolderPlus className="w-3.5 h-3.5" />
+          </button>
+
           {summary?.isRepo && (
-            <span className="text-xs font-mono px-2 py-0.5 rounded bg-subtle">
-              {summary.branch} {summary.ahead ? `↑${summary.ahead}` : ''} {summary.behind ? `↓${summary.behind}` : ''}
+            <span
+              className="text-xs font-mono px-2 py-0.5 rounded-md border shrink-0"
+              style={{ backgroundColor: 'var(--bg)', borderColor: 'var(--border)' }}
+            >
+              {summary.branch}
+              {summary.ahead ? ` ↑${summary.ahead}` : ''}
+              {summary.behind ? ` ↓${summary.behind}` : ''}
             </span>
           )}
         </div>
 
-        <div className="flex items-center gap-2 text-xs">
+        <div className="flex items-center gap-1.5 text-xs shrink-0">
           <button
             type="button"
-            onClick={() => setFlowOpen((o) => !o)}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border btn-ghost cursor-pointer"
+            disabled={!repoDir || fetching}
+            onClick={() => {
+              setFetching(true)
+              void runAction(() => window.workspaceApi.fetchAllRemotes(repoDir, true)).finally(() => setFetching(false))
+            }}
+            className="flex items-center gap-1 px-2 py-1.5 rounded-lg border btn-ghost cursor-pointer disabled:opacity-50"
             style={{ borderColor: 'var(--border)' }}
+            title="Fetch toàn bộ remote & tags (--prune)"
           >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Nhánh Git-Flow</span>
+            <Download className="w-3.5 h-3.5" />
+            <span className="hidden xl:inline">{fetching ? 'Fetching…' : 'Fetch'}</span>
           </button>
+
           <button
             type="button"
-            onClick={() => void handlePushMr()}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-white font-medium cursor-pointer"
+            disabled={!repoDir}
+            onClick={() => setPullPushMode('pull')}
+            className="flex items-center gap-1 px-2 py-1.5 rounded-lg border btn-ghost cursor-pointer disabled:opacity-50"
+            style={{ borderColor: 'var(--border)' }}
+            title="Pull cập nhật từ remote (Merge hoặc Rebase)"
+          >
+            <ArrowDownToLine className="w-3.5 h-3.5" />
+            <span className="hidden lg:inline">Pull</span>
+          </button>
+
+          <button
+            type="button"
+            disabled={!repoDir}
+            onClick={() => setPullPushMode('push')}
+            className="flex items-center gap-1 px-2 py-1.5 rounded-lg border btn-ghost cursor-pointer disabled:opacity-50"
+            style={{ borderColor: 'var(--border)' }}
+            title="Push nhánh hiện tại / Tags / Force-with-lease"
+          >
+            <ArrowUpFromLine className="w-3.5 h-3.5" />
+            <span className="hidden lg:inline">Push</span>
+          </button>
+
+          <button
+            type="button"
+            disabled={!repoDir}
+            onClick={() => setCreateBranchTarget('HEAD')}
+            className="flex items-center gap-1 px-2 py-1.5 rounded-lg border btn-ghost cursor-pointer disabled:opacity-50"
+            style={{ borderColor: 'var(--border)' }}
+            title="Tạo nhánh mới hoặc nhánh Git-Flow"
+          >
+            <GitBranch className="w-3.5 h-3.5" />
+            <span>Branch</span>
+          </button>
+
+          <button
+            type="button"
+            disabled={!repoDir}
+            onClick={() => setStashModalOpen(true)}
+            className="flex items-center gap-1 px-2 py-1.5 rounded-lg border btn-ghost cursor-pointer disabled:opacity-50"
+            style={{ borderColor: 'var(--border)' }}
+            title="Lưu thay đổi vào Stash"
+          >
+            <Archive className="w-3.5 h-3.5" />
+            <span>Stash</span>
+          </button>
+
+          <button
+            type="button"
+            disabled={!repoDir}
+            onClick={() => setTagTarget('HEAD')}
+            className="flex items-center gap-1 px-2 py-1.5 rounded-lg border btn-ghost cursor-pointer disabled:opacity-50"
+            style={{ borderColor: 'var(--border)' }}
+            title="Tạo Tag tại HEAD"
+          >
+            <Tag className="w-3.5 h-3.5" />
+            <span className="hidden xl:inline">Tag</span>
+          </button>
+
+          <button
+            type="button"
+            disabled={!repoDir}
+            onClick={() =>
+              void runAction(async () => {
+                const res = await window.workspaceApi.pushBranchForMr(repoDir)
+                if (res.mrUrl) void window.workspaceApi.openExternalUrl(res.mrUrl)
+                return res.message
+              })
+            }
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-white font-medium cursor-pointer disabled:opacity-50"
             style={{ backgroundColor: 'var(--accent)' }}
+            title="Push nhánh feature/fix & mở trang tạo Pull/Merge Request"
           >
             <Send className="w-3.5 h-3.5" />
-            <span>Push &amp; Mở MR/PR</span>
+            <span>Push &amp; MR/PR</span>
           </button>
+
           <button
             type="button"
+            disabled={!repoDir || loading}
             onClick={() => void refreshFullRepo(repoDir)}
             className="p-1.5 rounded-lg border btn-ghost cursor-pointer"
             style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}
+            title="Làm mới trạng thái Repository"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
           </button>
         </div>
       </div>
 
-      {flowOpen && (
-        <div
-          className="px-4 py-2.5 border-b flex items-center gap-2 text-xs"
-          style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}
-        >
-          <select
-            value={flowType}
-            onChange={(e) => setFlowType(e.target.value as 'feature' | 'fix' | 'bugfix' | 'hotfix')}
-            className="px-2 py-1 rounded border"
-            style={{ backgroundColor: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
-          >
-            <option value="feature">feature/</option>
-            <option value="fix">fix/</option>
-            <option value="bugfix">bugfix/</option>
-            <option value="hotfix">hotfix/</option>
-          </select>
-          <input
-            value={flowName}
-            onChange={(e) => setFlowName(e.target.value)}
-            placeholder="ten-nhanh (chữ thường, gạch ngang)"
-            className="px-2.5 py-1 rounded border w-64 outline-none"
-            style={{ backgroundColor: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
+      {/* Main Split: SourceTree Sidebar + Active View */}
+      <div className="flex-1 flex min-h-0 overflow-hidden">
+        <GitSidebar
+          activeTab={activeTab}
+          onChangeTab={(t) => {
+            setActiveTab(t)
+            if (t === 'status') clearStashDiff()
+          }}
+          changesCount={changes.length}
+          branches={branches}
+          stashes={stashes}
+          worktrees={worktrees}
+          selectedStashRef={selectedStashDiff?.ref ?? null}
+          onCheckoutBranch={(name, isRemote) =>
+            void runAction(() => window.workspaceApi.switchBranch(repoDir, name, isRemote))
+          }
+          onCreateBranch={() => setCreateBranchTarget('HEAD')}
+          onRenameBranch={(oldName) => setRenameBranchTarget(oldName)}
+          onDeleteBranch={(name) => {
+            if (window.confirm(`Xóa nhánh "${name}"?`)) {
+              void window.workspaceApi
+                .deleteGitBranch(repoDir, name, false)
+                .then(async (msg) => {
+                  await refreshFullRepo(repoDir)
+                  showToast(msg, 'ok')
+                })
+                .catch((err: Error) => {
+                  if (window.confirm(`${err.message}\n\nBạn có muốn Force Delete (-D) nhánh "${name}" không?`)) {
+                    void runAction(() => window.workspaceApi.deleteGitBranch(repoDir, name, true))
+                  }
+                })
+            }
+          }}
+          onMergeBranch={(sourceRef) => {
+            if (!window.confirm(`Merge nhánh "${sourceRef}" vào "${summary?.branch || 'HEAD'}"?`)) return
+            void (async () => {
+              try {
+                const res = await window.workspaceApi.mergeGitBranch(repoDir, sourceRef)
+                await refreshFullRepo(repoDir)
+                if (res.status === 'conflict') {
+                  await openConflictModalForRepo(sourceRef, res.message)
+                } else {
+                  showToast(res.message, 'ok')
+                }
+              } catch (err) {
+                showToast(err instanceof Error ? err.message : 'Merge thất bại', 'err')
+              }
+            })()
+          }}
+          onRebaseBranch={(targetRef) => {
+            if (!window.confirm(`Rebase nhánh "${summary?.branch || 'HEAD'}" lên "${targetRef}"?`)) return
+            void (async () => {
+              try {
+                const res = await window.workspaceApi.rebaseGitBranch(repoDir, targetRef)
+                await refreshFullRepo(repoDir)
+                if (!res.ok && res.conflicts?.length) {
+                  await openConflictModalForRepo(targetRef, res.message)
+                } else {
+                  showToast(res.message, 'ok')
+                }
+              } catch (err) {
+                showToast(err instanceof Error ? err.message : 'Rebase thất bại', 'err')
+              }
+            })()
+          }}
+          onSelectStash={(ref) => {
+            setActiveTab('history')
+            void openStashDiff(repoDir, ref)
+          }}
+          onApplyStash={(ref, pop) => void handleApplyStash(ref, pop)}
+          onDropStash={(ref) => {
+            if (window.confirm(`Xóa vĩnh viễn ${ref}?`)) {
+              void runAction(async () => {
+                const msg = await window.workspaceApi.dropGitStash(repoDir, ref)
+                clearStashDiff()
+                return msg
+              })
+            }
+          }}
+          onCreateTag={() => setTagTarget('HEAD')}
+          onDeleteTag={(name) => {
+            if (window.confirm(`Xóa tag "${name}"?`)) {
+              void runAction(() => window.workspaceApi.deleteGitTag(repoDir, name))
+            }
+          }}
+          onRemoveWorktree={(wtPath) =>
+            void removeWorktreeWithConfirm(repoDir, wtPath, false).then(() => refreshFullRepo(repoDir))
+          }
+        />
+
+        {activeTab === 'status' ? (
+          <GitWorkingCopyView
+            repoDir={repoDir}
+            changes={changes}
+            selectedFile={selectedFile}
+            activeDiff={activeDiff}
+            opState={opState}
+            isDark={isDark}
+            onSelectFile={(c) => void openWorkingDiff(repoDir, c)}
+            onStageFiles={async (paths, stage, all) => {
+              try {
+                await window.workspaceApi.stageFiles(repoDir, paths, stage, Boolean(all))
+                await refreshFullRepo(repoDir)
+              } catch (err) {
+                showToast(err instanceof Error ? err.message : 'Lỗi Stage/Unstage file', 'err')
+              }
+            }}
+            onDiscardFile={async (c) => {
+              try {
+                await window.workspaceApi.revertWorkingFile(repoDir, c)
+                await refreshFullRepo(repoDir)
+                showToast(`Đã hoàn tác ${c.path}`, 'ok')
+              } catch (err) {
+                showToast(err instanceof Error ? err.message : 'Lỗi Discard file', 'err')
+              }
+            }}
+            onApplyHunk={async (filePath, staged, action, hunkIndex) => {
+              try {
+                await window.workspaceApi.applyHunkPatch(repoDir, filePath, staged, action, hunkIndex)
+                await refreshFullRepo(repoDir)
+                if (action !== 'discard') {
+                  const nextChanges = useGitStore.getState().changes
+                  const updatedTarget =
+                    nextChanges.find((x) => x.path === filePath && x.staged === staged) ??
+                    nextChanges.find((x) => x.path === filePath)
+                  if (updatedTarget) {
+                    await openWorkingDiff(repoDir, updatedTarget)
+                  }
+                }
+              } catch (err) {
+                showToast(err instanceof Error ? err.message : 'Lỗi xử lý Hunk', 'err')
+              }
+            }}
+            onCommit={async (message, opts) => {
+              let msg: string
+              try {
+                msg = await window.workspaceApi.commitChanges(repoDir, message, { amend: opts.amend })
+              } catch (err) {
+                showToast(err instanceof Error ? err.message : 'Commit thất bại', 'err')
+                return false
+              }
+              if (opts.pushAfter) {
+                try {
+                  await window.workspaceApi.pushCurrentBranch(repoDir, { forceWithLease: opts.amend })
+                  await refreshFullRepo(repoDir)
+                  showToast(`${msg} & đã Push!`, 'ok')
+                } catch (err) {
+                  await refreshFullRepo(repoDir)
+                  showToast(
+                    `${msg}, nhưng Push lỗi: ${err instanceof Error ? err.message : 'Không rõ lỗi'}`,
+                    'err'
+                  )
+                }
+                return true
+              }
+              await refreshFullRepo(repoDir)
+              showToast(msg, 'ok')
+              return true
+            }}
+            onResolveConflicts={() => void openConflictModalForRepo('CONFLICT', 'Đang xử lý xung đột Git')}
+            onOpAction={async (op, action) => {
+              try {
+                const res = await window.workspaceApi.continueOrAbortGitOp(repoDir, op, action)
+                await refreshFullRepo(repoDir)
+                if (!res.ok && res.conflicts?.length) {
+                  await openConflictModalForRepo(op, res.message)
+                } else {
+                  showToast(res.message, 'ok')
+                }
+              } catch (err) {
+                showToast(err instanceof Error ? err.message : 'Thao tác thất bại', 'err')
+              }
+            }}
           />
-          <button
-            type="button"
-            onClick={() => void handleCreateFlow()}
-            className="px-3 py-1 rounded text-white font-medium cursor-pointer"
-            style={{ backgroundColor: 'var(--accent)' }}
-          >
-            Tạo từ origin
-          </button>
-        </div>
+        ) : (
+          <GitHistoryView
+            commits={commits}
+            branches={branches}
+            query={graphQuery}
+            selectedCommit={selectedCommit}
+            commitDetail={commitDetail}
+            commitFileDiff={commitFileDiff}
+            selectedStashDiff={selectedStashDiff}
+            isDark={isDark}
+            onChangeQuery={(patch) => void setGraphQuery(repoDir, patch)}
+            onSelectCommit={(c) => void selectCommit(repoDir, c)}
+            onSelectCommitFile={(hash, filePath) => void openCommitFileDiff(repoDir, hash, filePath)}
+            onCloseStashDiff={clearStashDiff}
+            onApplyStash={(ref, pop) => void handleApplyStash(ref, pop)}
+            onDropStash={(ref) => {
+              if (window.confirm(`Xóa vĩnh viễn ${ref}?`)) {
+                void runAction(async () => {
+                  const msg = await window.workspaceApi.dropGitStash(repoDir, ref)
+                  clearStashDiff()
+                  return msg
+                })
+              }
+            }}
+            onCreateBranchAt={(hash) => setCreateBranchTarget(hash)}
+            onCreateTagAt={(hash) => setTagTarget(hash)}
+            onCherryPick={(hash) =>
+              void (async () => {
+                try {
+                  const res = await window.workspaceApi.cherryPickGitCommit(repoDir, hash)
+                  await refreshFullRepo(repoDir)
+                  if (!res.ok && res.conflicts?.length) {
+                    await openConflictModalForRepo(hash.slice(0, 7), res.message)
+                  } else {
+                    showToast(res.message, 'ok')
+                  }
+                } catch (err) {
+                  showToast(err instanceof Error ? err.message : 'Cherry-pick thất bại', 'err')
+                }
+              })()
+            }
+            onRevertCommit={(hash) =>
+              void (async () => {
+                try {
+                  const res = await window.workspaceApi.revertGitCommit(repoDir, hash)
+                  await refreshFullRepo(repoDir)
+                  if (!res.ok && res.conflicts?.length) {
+                    await openConflictModalForRepo(hash.slice(0, 7), res.message)
+                  } else {
+                    showToast(res.message, 'ok')
+                  }
+                } catch (err) {
+                  showToast(err instanceof Error ? err.message : 'Revert thất bại', 'err')
+                }
+              })()
+            }
+            onCheckoutCommit={(hash) => {
+              if (window.confirm(`Checkout detached HEAD tại commit ${hash.slice(0, 7)}?`)) {
+                void runAction(() => window.workspaceApi.checkoutGitCommit(repoDir, hash))
+              }
+            }}
+            onResetCommit={(commit) => setResetTarget(commit)}
+            onCopySha={(hash) => {
+              void navigator.clipboard.writeText(hash)
+              showToast(`Đã sao chép SHA ${hash.slice(0, 10)}`, 'ok')
+            }}
+          />
+        )}
+      </div>
+
+      {/* Dialogs */}
+      {createBranchTarget !== null && (
+        <CreateBranchModal
+          defaultStartPoint={createBranchTarget}
+          branches={branches}
+          onClose={() => setCreateBranchTarget(null)}
+          onCreateStandard={async (name, startPoint, checkout) => {
+            await runAction(() =>
+              window.workspaceApi.createGitBranch(repoDir, name, { startPoint, checkout })
+            )
+            setCreateBranchTarget(null)
+          }}
+          onCreateFlow={async (type, name, carry) => {
+            await runAction(() => window.workspaceApi.createFlowBranch(repoDir, type, name, carry))
+            setCreateBranchTarget(null)
+          }}
+        />
       )}
 
-      {/* Main 3 columns */}
-      <div className="flex-1 flex min-h-0 overflow-hidden">
-        {/* Left: Branches & Worktrees */}
-        <aside
-          className="w-60 shrink-0 border-r overflow-y-auto p-2.5 space-y-4 text-xs"
-          style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}
-        >
-          <div>
-            <div className="font-semibold mb-1.5" style={{ color: 'var(--muted)' }}>
-              Nhánh Local
-            </div>
-            <div className="space-y-0.5">
-              {branches
-                .filter((b) => b.kind === 'local')
-                .map((b) => (
-                  <button
-                    key={b.name}
-                    type="button"
-                    onClick={() =>
-                      void window.workspaceApi.switchBranch(repoDir, b.name, false).then((msg) => {
-                        showToast(msg, 'ok')
-                        void refreshFullRepo(repoDir)
-                      }).catch((e: Error) => showToast(e.message, 'err'))
-                    }
-                    className="w-full text-left px-2 py-1 rounded truncate btn-ghost cursor-pointer"
-                    style={{
-                      backgroundColor: b.current ? 'var(--sel)' : 'transparent',
-                      color: b.current ? 'var(--accent)' : 'var(--text)'
-                    }}
-                  >
-                    {b.current ? '● ' : '○ '}
-                    {b.name}
-                  </button>
-                ))}
-            </div>
-          </div>
+      {renameBranchTarget !== null && (
+        <RenameBranchModal
+          oldName={renameBranchTarget}
+          onClose={() => setRenameBranchTarget(null)}
+          onSubmit={async (newName) => {
+            await runAction(() => window.workspaceApi.renameGitBranch(repoDir, renameBranchTarget, newName))
+            setRenameBranchTarget(null)
+          }}
+        />
+      )}
 
-          <div>
-            <div className="font-semibold mb-1.5" style={{ color: 'var(--muted)' }}>
-              Worktrees ({worktrees.length})
-            </div>
-            <div className="space-y-1">
-              {worktrees.map((w) => (
-                <div
-                  key={w.path}
-                  className="p-2 rounded-lg border flex items-center justify-between gap-1"
-                  style={{ backgroundColor: 'var(--bg)', borderColor: 'var(--border)' }}
-                >
-                  <div className="min-w-0">
-                    <div className="font-medium truncate">{w.branch}</div>
-                    <div className="text-[10px] truncate" style={{ color: 'var(--muted)' }}>
-                      {w.path}
-                    </div>
-                  </div>
-                  {!w.isMain && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void window.workspaceApi.removeWorktree(repoDir, w.path, false).then(() => refreshFullRepo(repoDir))
-                      }
-                      className="text-red-400 hover:opacity-75 cursor-pointer shrink-0"
-                      title="Xóa Worktree"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </aside>
+      {stashModalOpen && (
+        <SaveStashModal
+          onClose={() => setStashModalOpen(false)}
+          onSubmit={async (message, includeUntracked) => {
+            await runAction(() => window.workspaceApi.saveGitStash(repoDir, message, includeUntracked))
+            setStashModalOpen(false)
+          }}
+        />
+      )}
 
-        {/* Center: Commit Graph + Diff */}
-        <div className="flex-1 flex flex-col min-w-0 min-h-0">
-          <div className="flex-1 overflow-y-auto border-b" style={{ borderColor: 'var(--border)' }}>
-            <table className="w-full text-xs border-collapse">
-              <thead className="sticky top-0" style={{ backgroundColor: 'var(--header)' }}>
-                <tr className="text-left border-b" style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}>
-                  <th className="py-2 px-3 w-24">Graph</th>
-                  <th className="py-2 px-2">Nội dung Commit</th>
-                  <th className="py-2 px-2 w-32">Tác giả</th>
-                  <th className="py-2 px-3 w-32">Thời gian</th>
-                </tr>
-              </thead>
-              <tbody>
-                {commits.map((c) => {
-                  const rowH = 28
-                  const laneW = 14
-                  const svgW = Math.max(24, c.lanes * laneW + 10)
-                  return (
-                    <tr key={c.hash} className="border-b btn-ghost" style={{ borderColor: 'var(--border)' }}>
-                      <td className="px-3 py-0">
-                        <svg width={svgW} height={rowH} className="block">
-                          {c.segments.map((s, idx) => {
-                            const x1 = 8 + s.fromCol * laneW
-                            const x2 = 8 + s.toCol * laneW
-                            const y1 = s.kind === 2 ? rowH / 2 : 0
-                            const y2 = s.kind === 1 ? rowH / 2 : rowH
-                            const col = LANE_COLORS[s.colorIndex % LANE_COLORS.length]
-                            return <line key={idx} x1={x1} y1={y1} x2={x2} y2={y2} stroke={col} strokeWidth={2} />
-                          })}
-                          <circle
-                            cx={8 + c.col * laneW}
-                            cy={rowH / 2}
-                            r={4}
-                            fill={LANE_COLORS[c.colorIndex % LANE_COLORS.length]}
-                          />
-                        </svg>
-                      </td>
-                      <td className="px-2 py-1 truncate max-w-[420px]">
-                        <span className="font-mono text-[11px] mr-2" style={{ color: 'var(--muted)' }}>
-                          {c.shortHash}
-                        </span>
-                        {c.refs && (
-                          <span
-                            className="mr-2 px-1.5 py-0.5 rounded text-[10px] font-semibold"
-                            style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent)' }}
-                          >
-                            {c.refs}
-                          </span>
-                        )}
-                        <span>{c.subject}</span>
-                      </td>
-                      <td className="px-2 py-1 truncate" style={{ color: 'var(--muted)' }}>
-                        {c.author}
-                      </td>
-                      <td className="px-3 py-1 font-mono text-[11px]" style={{ color: 'var(--muted)' }}>
-                        {c.date}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+      {tagTarget !== null && (
+        <CreateTagModal
+          defaultTarget={tagTarget}
+          onClose={() => setTagTarget(null)}
+          onSubmit={async (name, target, message) => {
+            await runAction(() => window.workspaceApi.createGitTag(repoDir, name, target, message))
+            setTagTarget(null)
+          }}
+        />
+      )}
 
-          {activeDiff && (
-            <div className="h-72 shrink-0">
-              <MonacoDiffView
-                original={activeDiff.original}
-                modified={activeDiff.modified}
-                language={detectMonacoLanguage(activeDiff.path)}
-                theme={isDark ? 'vs-dark' : 'light'}
-                sideBySide={true}
-                fontSize={12}
-              />
-            </div>
-          )}
-        </div>
+      {resetTarget !== null && (
+        <ResetCommitModal
+          commitHash={resetTarget.hash}
+          commitSubject={resetTarget.subject}
+          onClose={() => setResetTarget(null)}
+          onSubmit={async (mode) => {
+            await runAction(() => window.workspaceApi.resetGitToCommit(repoDir, resetTarget.hash, mode))
+            setResetTarget(null)
+          }}
+        />
+      )}
 
-        {/* Right: Stage & Commit */}
-        <aside
-          className="w-72 shrink-0 border-l flex flex-col min-h-0 p-2.5 gap-2.5 text-xs"
-          style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}
-        >
-          <div className="font-semibold">Thay đổi ({changes.length})</div>
-          <div className="flex-1 overflow-y-auto space-y-1">
-            {changes.map((c, idx) => (
-              <div
-                key={`${c.path}-${c.staged}-${idx}`}
-                onClick={() => void openWorkingDiff(repoDir, c)}
-                className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg border cursor-pointer btn-ghost"
-                style={{ backgroundColor: 'var(--bg)', borderColor: 'var(--border)' }}
-              >
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="font-mono font-bold" style={{ color: c.staged ? 'var(--ok)' : 'var(--warn)' }}>
-                    {c.code}
-                  </span>
-                  <span className="truncate font-mono text-[11px]">{c.path}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    void handleStage(c.path, !c.staged)
-                  }}
-                  className="px-1.5 py-0.5 rounded border text-[10px] shrink-0 cursor-pointer"
-                  style={{ borderColor: 'var(--border)' }}
-                >
-                  {c.staged ? 'Unstage' : 'Stage'}
-                </button>
-              </div>
-            ))}
-          </div>
+      {pullPushMode !== null && (
+        <PullPushModal
+          mode={pullPushMode}
+          branch={summary?.branch || 'HEAD'}
+          onClose={() => setPullPushMode(null)}
+          onPull={async (rebase) => {
+            const res = await window.workspaceApi.pullCurrentBranch(repoDir, { rebase })
+            setPullPushMode(null)
+            await refreshFullRepo(repoDir)
+            if (!res.ok && res.conflicts?.length) {
+              await openConflictModalForRepo('remote', res.message)
+            } else {
+              showToast(res.message, 'ok')
+            }
+          }}
+          onPush={async (forceWithLease, pushTags) => {
+            await runAction(() =>
+              window.workspaceApi.pushCurrentBranch(repoDir, { forceWithLease, pushTags })
+            )
+            setPullPushMode(null)
+          }}
+        />
+      )}
 
-          <textarea
-            rows={3}
-            value={commitMsg}
-            onChange={(e) => setCommitMsg(e.target.value)}
-            placeholder="Commit message..."
-            className="w-full p-2 rounded-lg border outline-none resize-none"
-            style={{ backgroundColor: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
-          />
-          <button
-            type="button"
-            onClick={() => void handleCommit()}
-            className="w-full py-1.5 rounded-lg text-white font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
-            style={{ backgroundColor: 'var(--accent)' }}
-          >
-            <GitCommit className="w-3.5 h-3.5" />
-            <span>Commit các file đã Stage</span>
-          </button>
-        </aside>
-      </div>
+      {conflictModalResult && (
+        <MergeConflictModal
+          result={conflictModalResult}
+          worktreePath={null}
+          themeName={themeName}
+          onClose={() => setConflictModalResult(null)}
+          onMinimizeToBanner={() => setConflictModalResult(null)}
+          onUpdateResult={setConflictModalResult}
+          onRetryAutoCommitMain={async () => {}}
+          onAskAiMerge={async (prompt) => {
+            if (!activeSession) {
+              showToast('Hãy mở một phiên AI trong AI Studio trước để nhờ AI hỗ trợ merge.', 'info')
+              return
+            }
+            await sendPrompt({ sessionId: activeSession.id, prompt })
+            showToast('Đã gửi yêu cầu xử lý xung đột tới AI Agent!', 'ok')
+          }}
+          onMergedDone={async () => {
+            setConflictModalResult(null)
+            await refreshFullRepo(repoDir)
+            showToast('Đã hoàn tất giải quyết xung đột!', 'ok')
+          }}
+        />
+      )}
     </div>
   )
 }

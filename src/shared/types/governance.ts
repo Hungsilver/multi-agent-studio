@@ -7,7 +7,7 @@ export interface SkillItem {
   rawContent: string
   filePath: string
   scope: 'workspace' | 'global'
-  source: 'claude' | 'agents' | 'gemini' | 'app'
+  source: 'claude' | 'agents' | 'gemini' | 'app' | 'plugin'
   updatedAt: string
 }
 

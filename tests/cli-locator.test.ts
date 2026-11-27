@@ -3,6 +3,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  detectAgyDefaultModel,
+  detectClaudeDefaultModel,
   findCodexEntryInDir,
   readCodexCachedModels,
   readCodexConfigDefaultModel,
@@ -87,5 +89,26 @@ describe('env-resolver & cli-locator', () => {
     const resolved = resolveCliCommand('agy', agyExe)
     expect(resolved?.file).toBe(agyExe)
     expect(resolved?.resolvedVia).toBe('override')
+  })
+
+  it('detects default models for Claude and AGY from local CLI configs/logs', () => {
+    const claudeHome = makeTempDir('claude-home-')
+    fs.writeFileSync(path.join(claudeHome, 'settings.json'), JSON.stringify({ model: 'claude-opus-5-5' }))
+    expect(detectClaudeDefaultModel(claudeHome)).toEqual({
+      model: 'claude-opus-5-5',
+      source: '~/.claude/settings.json'
+    })
+
+    const agyHome = makeTempDir('agy-home-')
+    fs.writeFileSync(
+      path.join(agyHome, 'cli.log'),
+      'I1126 Propagating selected model override to backend: label="Gemini 4 Neon (High)"\n'
+    )
+    expect(
+      detectAgyDefaultModel([{ id: 'gemini-4-neon-high', label: 'Gemini 4 Neon (High)' }], agyHome)
+    ).toEqual({
+      model: 'gemini-4-neon-high',
+      source: 'mặc định AGY CLI'
+    })
   })
 })

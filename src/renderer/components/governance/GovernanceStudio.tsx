@@ -7,6 +7,7 @@ import { ensureMonacoSetup } from '../../lib/monaco-setup'
 import { useAiStore } from '../../stores/useAiStore'
 import { useGovernanceStore } from '../../stores/useGovernanceStore'
 import { useSettingsStore } from '../../stores/useSettingsStore'
+import { CustomSelect } from '../common/CustomSelect'
 
 type GovTab = 'skills' | 'rules' | 'mcp' | 'templates'
 
@@ -85,11 +86,13 @@ export function GovernanceStudio(): React.JSX.Element {
   }
 
   const handleSaveSkill = async (): Promise<void> => {
+    const safeSource = skSource === 'plugin' ? 'app' : skSource
+    const isPluginOverride = selectedSkill?.source === 'plugin'
     try {
       const saved = await window.workspaceApi.saveSkill({
         workspacePath: selectedWs || undefined,
         scope: skScope,
-        source: skSource,
+        source: safeSource,
         name: skName,
         description: skDesc,
         tags: skTags
@@ -97,11 +100,16 @@ export function GovernanceStudio(): React.JSX.Element {
           .map((t) => t.trim())
           .filter(Boolean),
         body: skBody,
-        existingFilePath: selectedSkill?.filePath
+        existingFilePath: isPluginOverride ? undefined : selectedSkill?.filePath
       })
       await loadAll(selectedWs || undefined)
       openSkill(saved)
-      showToast(`Đã lưu Skill "${saved.name}"`, 'ok')
+      showToast(
+        isPluginOverride
+          ? `Đã tạo bản tùy chỉnh cho Skill "${saved.name}"`
+          : `Đã lưu Skill "${saved.name}"`,
+        'ok'
+      )
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Lỗi lưu Skill', 'err')
     }
@@ -173,19 +181,20 @@ export function GovernanceStudio(): React.JSX.Element {
         </div>
 
         <div className="flex items-center gap-2">
-          <select
+          <CustomSelect<string>
             value={selectedWs}
-            onChange={(e) => setSelectedWs(e.target.value)}
-            className="px-2.5 py-1.5 rounded-lg border text-xs outline-none max-w-[260px]"
-            style={{ backgroundColor: 'var(--bg)', borderColor: 'var(--border)', color: 'var(--text)' }}
-          >
-            <option value="">Chỉ phạm vi Global</option>
-            {workspaces.map((w) => (
-              <option key={w.id} value={w.path}>
-                {w.name} ({w.path})
-              </option>
-            ))}
-          </select>
+            onChange={setSelectedWs}
+            className="max-w-[260px] py-1.5"
+            menuMinWidth={260}
+            options={[
+              { value: '', label: 'Chỉ phạm vi Global', description: 'Skills & MCP dùng chung toàn máy' },
+              ...workspaces.map((w) => ({
+                value: w.path,
+                label: w.name,
+                description: w.path
+              }))
+            ]}
+          />
 
           <button
             type="button"
@@ -261,16 +270,18 @@ export function GovernanceStudio(): React.JSX.Element {
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-semibold truncate">{sk.name}</span>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          void handleDeleteSkill(sk)
-                        }}
-                        className="opacity-0 group-hover:opacity-100 text-red-400 hover:opacity-75 cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      {sk.source !== 'plugin' && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void handleDeleteSkill(sk)
+                          }}
+                          className="opacity-0 group-hover:opacity-100 text-red-400 hover:opacity-75 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                     <div className="text-[11px] line-clamp-2 mt-0.5" style={{ color: 'var(--muted)' }}>
                       {sk.description}
@@ -308,16 +319,18 @@ export function GovernanceStudio(): React.JSX.Element {
                   style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }}
                 />
                 <div className="flex gap-2">
-                  <select
+                  <CustomSelect<'workspace' | 'global'>
                     value={skScope}
                     disabled={Boolean(selectedSkill)}
-                    onChange={(e) => setSkScope(e.target.value as 'workspace' | 'global')}
-                    className="flex-1 px-2 py-1.5 rounded-lg border outline-none"
-                    style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }}
-                  >
-                    <option value="workspace" disabled={!selectedWs}>Workspace</option>
-                    <option value="global">Global</option>
-                  </select>
+                    onChange={setSkScope}
+                    className="flex-1 py-1.5"
+                    triggerBg="var(--surface)"
+                    menuMinWidth={160}
+                    options={[
+                      { value: 'workspace', label: 'Workspace', disabled: !selectedWs },
+                      { value: 'global', label: 'Global' }
+                    ]}
+                  />
                   <button
                     type="button"
                     onClick={() => void handleSaveSkill()}

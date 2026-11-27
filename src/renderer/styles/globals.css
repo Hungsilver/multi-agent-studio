@@ -53,6 +53,14 @@ body,
   background-color: color-mix(in srgb, var(--text) 6%, transparent);
 }
 
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
 /* Custom sleek scrollbars */
 ::-webkit-scrollbar {
   width: 7px;

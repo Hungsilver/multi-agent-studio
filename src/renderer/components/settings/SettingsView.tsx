@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle2, Download, ExternalLink, GitBranch, Package, RefreshCw, Settings, TerminalSquare, XCircle } from 'lucide-react'
+import { CheckCircle2, ExternalLink, GitBranch, Package, RefreshCw, Settings, TerminalSquare, XCircle } from 'lucide-react'
 import { PROVIDERS } from '@shared/constants/providers'
 import { ACCENTS, THEMES } from '@shared/constants/themes'
 import type { ProviderId } from '@shared/types/ai'
 import type { AccentName, AppUpdateInfo, AppVersionInfo, ThemeName } from '@shared/types/workspace'
-import { useAiStore } from '../../stores/useAiStore'
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import { useTerminalStore } from '../../stores/useTerminalStore'
+import { useWorkspaceTabsStore } from '../../stores/useWorkspaceTabsStore'
 
 export function SettingsView(): React.JSX.Element {
   const settings = useSettingsStore((s) => s.settings)
@@ -16,12 +16,10 @@ export function SettingsView(): React.JSX.Element {
   const showToast = useSettingsStore((s) => s.showToast)
   const setActiveTab = useSettingsStore((s) => s.setActiveTab)
 
-  const loadSessions = useAiStore((s) => s.loadSessions)
-  const setViewMode = useAiStore((s) => s.setViewMode)
   const attachExistingPty = useTerminalStore((s) => s.attachExistingPty)
+  const openToolTab = useWorkspaceTabsStore((s) => s.openToolTab)
 
   const [refreshing, setRefreshing] = useState(false)
-  const [importing, setImporting] = useState(false)
   const [versionInfo, setVersionInfo] = useState<AppVersionInfo | null>(null)
   const [checkingUpdate, setCheckingUpdate] = useState(false)
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null)
@@ -36,7 +34,7 @@ export function SettingsView(): React.JSX.Element {
       const info = await window.workspaceApi.checkAppUpdate()
       setUpdateInfo(info)
       if (info.status === 'update-available') {
-        showToast('Có bản cập nhật mới cho AI Coding Tool', 'info')
+        showToast('Có bản cập nhật mới cho Multi-Agent Studio', 'info')
       } else if (info.status === 'up-to-date') {
         showToast('Bạn đang dùng phiên bản mới nhất', 'ok')
       }
@@ -47,8 +45,8 @@ export function SettingsView(): React.JSX.Element {
 
   const handleRunSourceUpdate = async (): Promise<void> => {
     const res = await window.workspaceApi.runSourceUpdate()
-    attachExistingPty({ id: res.ptyId, title: 'Cập nhật AI Coding Tool', cwd: '', backend: 'conpty' })
-    setViewMode('terminal')
+    attachExistingPty({ id: res.ptyId, title: 'Cập nhật Multi-Agent Studio', cwd: '', backend: 'conpty' })
+    openToolTab({ kind: 'terminal', title: 'Cập nhật Multi-Agent Studio', ptyId: res.ptyId })
     setActiveTab('ai')
   }
 
@@ -62,29 +60,10 @@ export function SettingsView(): React.JSX.Element {
     }
   }
 
-  const handleImportV1 = async (): Promise<void> => {
-    setImporting(true)
-    try {
-      const res = await window.workspaceApi.importLegacyConfig()
-      if (!res.found) {
-        showToast('Không tìm thấy cấu hình PegasusPanel V1 trong %APPDATA%', 'info')
-      } else {
-        await useSettingsStore.getState().init()
-        await loadSessions()
-        showToast(
-          `Đã nhập ${res.importedWorkspaces} workspace và ${res.importedSessions} phiên từ V1`,
-          'ok'
-        )
-      }
-    } finally {
-      setImporting(false)
-    }
-  }
-
   const handleInstallCli = async (provider: ProviderId): Promise<void> => {
     const res = await window.workspaceApi.installOrUpdateCli(provider)
     attachExistingPty({ id: res.ptyId, title: `Cài ${PROVIDERS[provider].name}`, cwd: '', backend: 'conpty' })
-    setViewMode('terminal')
+    openToolTab({ kind: 'terminal', title: `Cài ${PROVIDERS[provider].name}`, ptyId: res.ptyId })
     setActiveTab('ai')
   }
 
@@ -93,7 +72,7 @@ export function SettingsView(): React.JSX.Element {
       <div className="max-w-4xl mx-auto space-y-6 text-xs">
         <div className="flex items-center gap-2.5">
           <Settings className="w-5 h-5" style={{ color: 'var(--accent)' }} />
-          <h1 className="text-base font-semibold">AI Coding Tool — Cài đặt &amp; Chẩn đoán CLI</h1>
+          <h1 className="text-base font-semibold">Multi-Agent Studio — Cài đặt &amp; Chẩn đoán CLI</h1>
         </div>
 
         {/* Version & Updates */}
@@ -106,7 +85,7 @@ export function SettingsView(): React.JSX.Element {
               <Package className="w-4 h-4" style={{ color: 'var(--accent)' }} />
               <div>
                 <div className="font-semibold text-sm flex items-center gap-2">
-                  <span>Phiên bản &amp; Cập nhật (AI Coding Tool)</span>
+                  <span>Phiên bản &amp; Cập nhật (Multi-Agent Studio)</span>
                   <span
                     className="px-2 py-0.5 rounded-full text-[11px] font-mono"
                     style={{ backgroundColor: 'var(--accent-soft)', color: 'var(--accent)' }}
@@ -121,7 +100,7 @@ export function SettingsView(): React.JSX.Element {
                   </span>
                 </div>
                 <div style={{ color: 'var(--muted)' }}>
-                  Dữ liệu phiên AI &amp; cấu hình trong <code className="font-mono">%APPDATA%\AiCodingTool</code> được giữ nguyên khi cập nhật.
+                  Dữ liệu phiên AI &amp; cấu hình trong <code className="font-mono">%APPDATA%\MultiAgentStudio</code> được giữ nguyên khi cập nhật.
                 </div>
               </div>
             </div>
@@ -142,7 +121,7 @@ export function SettingsView(): React.JSX.Element {
                 type="button"
                 onClick={() =>
                   void window.workspaceApi.openExternalUrl(
-                    updateInfo?.releaseUrl || versionInfo?.releasesUrl || 'https://github.com/Hungsilver/ai-coding-tool/releases'
+                    updateInfo?.releaseUrl || versionInfo?.releasesUrl || 'https://github.com/Hungsilver/multi-agent-studio/releases'
                   )
                 }
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border btn-ghost cursor-pointer"
@@ -265,12 +244,12 @@ export function SettingsView(): React.JSX.Element {
           </div>
         </section>
 
-        {/* AI Preferences & Legacy Import */}
+        {/* AI Preferences & Notifications */}
         <section
           className="p-4 rounded-xl border space-y-3"
           style={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)' }}
         >
-          <div className="font-semibold text-sm">Cấu hình AI &amp; Dữ liệu cũ</div>
+          <div className="font-semibold text-sm">Cấu hình AI &amp; Thông báo</div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <label className="flex items-center justify-between p-3 rounded-lg border cursor-pointer" style={{ backgroundColor: 'var(--bg)', borderColor: 'var(--border)' }}>
@@ -290,22 +269,6 @@ export function SettingsView(): React.JSX.Element {
                 onChange={(e) => void updateSettings({ notifications: e.target.checked })}
               />
             </label>
-          </div>
-
-          <div className="pt-1 flex items-center justify-between">
-            <span style={{ color: 'var(--muted)' }}>
-              Nhập workspace &amp; phiên cũ từ Develop Workspace (tùy chọn, %APPDATA%\PegasusPanel)
-            </span>
-            <button
-              type="button"
-              disabled={importing}
-              onClick={() => void handleImportV1()}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border btn-ghost cursor-pointer"
-              style={{ borderColor: 'var(--border)' }}
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>{importing ? 'Đang nhập…' : 'Nhập dữ liệu cũ'}</span>
-            </button>
           </div>
         </section>
 
@@ -376,11 +339,15 @@ export function SettingsView(): React.JSX.Element {
                       {cli.entryScriptPath ? ` → ${cli.entryScriptPath}` : ''}
                     </div>
                   )}
-                  {cli.defaultModel && (
-                    <div className="text-[11px]" style={{ color: 'var(--info)' }}>
-                      Model mặc định của CLI: <strong>{cli.defaultModel}</strong>
-                    </div>
-                  )}
+                  <div className="text-[11px] flex flex-wrap items-center gap-1.5">
+                    <span style={{ color: 'var(--muted)' }}>Model mặc định của CLI:</span>
+                    <strong className="font-mono" style={{ color: cli.defaultModel ? 'var(--info)' : 'var(--muted)' }}>
+                      {cli.defaultModel ?? 'Chưa xác định'}
+                    </strong>
+                    {cli.defaultModelSource && (
+                      <span style={{ color: 'var(--muted)' }}>({cli.defaultModelSource})</span>
+                    )}
+                  </div>
                   {cli.notes && (
                     <div className="text-[11px]" style={{ color: 'var(--muted)' }}>
                       {cli.notes}

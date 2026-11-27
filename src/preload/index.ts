@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { AppsAlertPush } from '@shared/types/apps'
 import type { AiStreamPushEvent, AiSessionStatusPush, PtyDataPush, PtyExitPush, WorkspaceApi } from '@shared/types/ipc'
 
 function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
@@ -21,7 +22,6 @@ const api: WorkspaceApi = {
   listWorkspaces: () => ipcRenderer.invoke('workspaces:list'),
   addWorkspace: (folderPath) => ipcRenderer.invoke('workspaces:add', folderPath),
   removeWorkspace: (id) => ipcRenderer.invoke('workspaces:remove', id),
-  importLegacyConfig: () => ipcRenderer.invoke('legacy:import'),
 
   getCliStatuses: (forceRefresh) => ipcRenderer.invoke('cli:statuses', forceRefresh),
   installOrUpdateCli: (provider) => ipcRenderer.invoke('cli:install', provider),
@@ -39,13 +39,19 @@ const api: WorkspaceApi = {
   switchProvider: (sessionId, targetProvider, model) => ipcRenderer.invoke('ai:switchProvider', sessionId, targetProvider, model),
   updateMemory: (sessionId, patch) => ipcRenderer.invoke('ai:updateMemory', sessionId, patch),
   compactMemory: (sessionId) => ipcRenderer.invoke('ai:compactMemory', sessionId),
+  compactSessionContext: (sessionId) => ipcRenderer.invoke('ai:compactContext', sessionId),
   sendPrompt: (req) => ipcRenderer.invoke('ai:sendPrompt', req),
   stopRun: (sessionId) => ipcRenderer.invoke('ai:stopRun', sessionId),
   importClaudeTranscript: (sessionId) => ipcRenderer.invoke('ai:importClaudeTranscript', sessionId),
   getUsageSummary: () => ipcRenderer.invoke('ai:usageSummary'),
+  getProviderQuotas: (forceRefresh, agyReferenceCap5h) => ipcRenderer.invoke('ai:providerQuotas', forceRefresh, agyReferenceCap5h),
 
   searchWorkspaceFiles: (dir, query) => ipcRenderer.invoke('context:searchFiles', dir, query),
   saveClipboardImage: (sessionId, base64DataUrl) => ipcRenderer.invoke('context:saveClipboardImage', sessionId, base64DataUrl),
+  listWorkspaceDir: (rootDir, relDir) => ipcRenderer.invoke('fs:listDir', rootDir, relDir),
+  readWorkspaceFile: (rootDir, relPath) => ipcRenderer.invoke('fs:readFile', rootDir, relPath),
+  readExternalFile: (absPath) => ipcRenderer.invoke('fs:readExternalFile', absPath),
+  writeWorkspaceFile: (rootDir, relPath, content) => ipcRenderer.invoke('fs:writeFile', rootDir, relPath, content),
 
   listSkills: (workspacePath) => ipcRenderer.invoke('gov:listSkills', workspacePath),
   saveSkill: (input) => ipcRenderer.invoke('gov:saveSkill', input),
@@ -64,20 +70,51 @@ const api: WorkspaceApi = {
   getTurnDiff: (dir, preTreeHash, postTreeHash) => ipcRenderer.invoke('git:turnDiff', dir, preTreeHash, postTreeHash),
   getTurnFileDiff: (dir, preTreeHash, postTreeHash, filePath) => ipcRenderer.invoke('git:turnFileDiff', dir, preTreeHash, postTreeHash, filePath),
   stageFiles: (dir, paths, stage, all) => ipcRenderer.invoke('git:stage', dir, paths, stage, all),
-  commitChanges: (dir, message) => ipcRenderer.invoke('git:commit', dir, message),
+  commitChanges: (dir, message, options) => ipcRenderer.invoke('git:commit', dir, message, options),
+  getLastCommitMessage: (dir) => ipcRenderer.invoke('git:lastCommitMsg', dir),
   revertWorkingFile: (dir, change) => ipcRenderer.invoke('git:revertFile', dir, change),
+  applyHunkPatch: (dir, filePath, staged, action, hunkIndex) =>
+    ipcRenderer.invoke('git:applyHunk', dir, filePath, staged, action, hunkIndex),
   restoreTurnCheckpoint: (sessionId, turnId) => ipcRenderer.invoke('git:restoreTurn', sessionId, turnId),
   restoreFileFromTurn: (sessionId, turnId, filePath) => ipcRenderer.invoke('git:restoreTurnFile', sessionId, turnId, filePath),
   listBranches: (dir) => ipcRenderer.invoke('git:branches', dir),
-  getCommitGraph: (dir, count) => ipcRenderer.invoke('git:graph', dir, count),
+  getCommitGraph: (dir, countOrQuery) => ipcRenderer.invoke('git:graph', dir, countOrQuery),
   getCommitDetail: (dir, hash) => ipcRenderer.invoke('git:commitDetail', dir, hash),
   getCommitFileDiff: (dir, hash, filePath) => ipcRenderer.invoke('git:commitFileDiff', dir, hash, filePath),
   switchBranch: (dir, name, isRemote) => ipcRenderer.invoke('git:switchBranch', dir, name, isRemote),
   createFlowBranch: (dir, type, name, carry) => ipcRenderer.invoke('git:createFlowBranch', dir, type, name, carry),
   pushBranchForMr: (dir) => ipcRenderer.invoke('git:pushForMr', dir),
+  getRepoOperationState: (dir) => ipcRenderer.invoke('git:opState', dir),
+  fetchAllRemotes: (dir, prune) => ipcRenderer.invoke('git:fetchAll', dir, prune),
+  pullCurrentBranch: (dir, options) => ipcRenderer.invoke('git:pullBranch', dir, options),
+  pushCurrentBranch: (dir, options) => ipcRenderer.invoke('git:pushBranch', dir, options),
+  createGitBranch: (dir, name, options) => ipcRenderer.invoke('git:createBranch', dir, name, options),
+  renameGitBranch: (dir, oldName, newName) => ipcRenderer.invoke('git:renameBranch', dir, oldName, newName),
+  deleteGitBranch: (dir, name, force) => ipcRenderer.invoke('git:deleteBranch', dir, name, force),
+  mergeGitBranch: (dir, sourceRef, options) => ipcRenderer.invoke('git:mergeBranch', dir, sourceRef, options),
+  rebaseGitBranch: (dir, targetRef) => ipcRenderer.invoke('git:rebaseBranch', dir, targetRef),
+  continueOrAbortGitOp: (dir, op, action) => ipcRenderer.invoke('git:continueOrAbortOp', dir, op, action),
+  listGitStashes: (dir) => ipcRenderer.invoke('git:listStashes', dir),
+  saveGitStash: (dir, message, includeUntracked) => ipcRenderer.invoke('git:saveStash', dir, message, includeUntracked),
+  applyOrPopGitStash: (dir, stashRef, pop) => ipcRenderer.invoke('git:applyStash', dir, stashRef, pop),
+  dropGitStash: (dir, stashRef) => ipcRenderer.invoke('git:dropStash', dir, stashRef),
+  getGitStashDiff: (dir, stashRef) => ipcRenderer.invoke('git:stashDiff', dir, stashRef),
+  createGitTag: (dir, name, target, message) => ipcRenderer.invoke('git:createTag', dir, name, target, message),
+  deleteGitTag: (dir, name) => ipcRenderer.invoke('git:deleteTag', dir, name),
+  cherryPickGitCommit: (dir, hash) => ipcRenderer.invoke('git:cherryPick', dir, hash),
+  revertGitCommit: (dir, hash) => ipcRenderer.invoke('git:revertCommit', dir, hash),
+  resetGitToCommit: (dir, hash, mode) => ipcRenderer.invoke('git:resetCommit', dir, hash, mode),
+  checkoutGitCommit: (dir, hash) => ipcRenderer.invoke('git:checkoutCommit', dir, hash),
   listWorktrees: (dir) => ipcRenderer.invoke('git:listWorktrees', dir),
-  removeWorktree: (repoRoot, worktreePath, deleteBranch) => ipcRenderer.invoke('git:removeWorktree', repoRoot, worktreePath, deleteBranch),
+  removeWorktree: (repoRoot, worktreePath, deleteBranch, force) => ipcRenderer.invoke('git:removeWorktree', repoRoot, worktreePath, deleteBranch, force),
   mergeWorktreeToCurrent: (repoRoot, worktreeBranch) => ipcRenderer.invoke('git:mergeWorktree', repoRoot, worktreeBranch),
+  prepareAndMergeWorktree: (repoRoot, worktreePath, worktreeBranch, options) =>
+    ipcRenderer.invoke('git:prepareMergeWorktree', repoRoot, worktreePath, worktreeBranch, options),
+  getMergeConflictStatus: (repoRoot) => ipcRenderer.invoke('git:getMergeConflicts', repoRoot),
+  resolveMergeConflictFile: (repoRoot, filePath, strategy, customContent) =>
+    ipcRenderer.invoke('git:resolveMergeConflict', repoRoot, filePath, strategy, customContent),
+  finalizeWorktreeMerge: (repoRoot, action, commitMessage) =>
+    ipcRenderer.invoke('git:finalizeMerge', repoRoot, action, commitMessage),
 
   createPty: (opts) => ipcRenderer.invoke('pty:create', opts),
   writePty: (ptyId, data) => ipcRenderer.send('pty:write', ptyId, data),
@@ -85,10 +122,36 @@ const api: WorkspaceApi = {
   killPty: (ptyId) => ipcRenderer.invoke('pty:kill', ptyId),
   openInteractiveSessionPty: (sessionId) => ipcRenderer.invoke('pty:openInteractiveSession', sessionId),
 
+  getAppsConfig: () => ipcRenderer.invoke('apps:getConfig'),
+  updateAppsConfig: (patch) => ipcRenderer.invoke('apps:updateConfig', patch),
+  scanAppsProjects: (roots) => ipcRenderer.invoke('apps:scan', roots),
+  listDevApps: (includeStats) => ipcRenderer.invoke('apps:list', includeStats),
+  addDevApp: (input) => ipcRenderer.invoke('apps:add', input),
+  updateDevApp: (id, patch) => ipcRenderer.invoke('apps:update', id, patch),
+  removeDevApps: (ids, stopRunning) => ipcRenderer.invoke('apps:remove', ids, stopRunning),
+  restoreDevApps: (ids) => ipcRenderer.invoke('apps:restore', ids),
+  setDevAppsAutoRestart: (ids, on) => ipcRenderer.invoke('apps:autoRestart', ids, on),
+  runAppsBatch: (action, ids) => ipcRenderer.invoke('apps:batch', action, ids),
+  runAppMaintenance: (id, task, stopFirst) => ipcRenderer.invoke('apps:maintenance', id, task, stopFirst),
+  getDevAppLog: (id, tail) => ipcRenderer.invoke('apps:getLog', id, tail),
+  clearDevAppLog: (id) => ipcRenderer.invoke('apps:clearLog', id),
+  saveAppsProfile: (name, ids) => ipcRenderer.invoke('apps:saveProfile', name, ids),
+  removeAppsProfile: (name) => ipcRenderer.invoke('apps:removeProfile', name),
+  stopPortOwner: (port) => ipcRenderer.invoke('apps:stopPort', port),
+  isIisInstalled: () => ipcRenderer.invoke('apps:iisInstalled'),
+  listIisSites: () => ipcRenderer.invoke('apps:listIis'),
+  addIisApps: (siteNames) => ipcRenderer.invoke('apps:addIis', siteNames),
+  startAppTunnel: (port, name) => ipcRenderer.invoke('apps:startTunnel', port, name),
+  stopAppTunnel: (port) => ipcRenderer.invoke('apps:stopTunnel', port),
+  getAppShareInfo: (appName, group, port, url) => ipcRenderer.invoke('apps:shareInfo', appName, group, port, url),
+  exportAppsCatalogDialog: () => ipcRenderer.invoke('apps:exportDialog'),
+  importAppsCatalogDialog: () => ipcRenderer.invoke('apps:importDialog'),
+
   onAiEvent: (cb) => subscribe<AiStreamPushEvent>('ai:event', cb),
   onAiSessionStatus: (cb) => subscribe<AiSessionStatusPush>('ai:status', cb),
   onPtyData: (cb) => subscribe<PtyDataPush>('pty:data', cb),
-  onPtyExit: (cb) => subscribe<PtyExitPush>('pty:exit', cb)
+  onPtyExit: (cb) => subscribe<PtyExitPush>('pty:exit', cb),
+  onAppsAlert: (cb) => subscribe<AppsAlertPush>('apps:alert', cb)
 }
 
 contextBridge.exposeInMainWorld('workspaceApi', api)

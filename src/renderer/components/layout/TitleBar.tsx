@@ -1,23 +1,37 @@
-import { Minus, Square, X, Search } from 'lucide-react'
+import { Minus, PanelLeftClose, PanelLeftOpen, Search, Square, X } from 'lucide-react'
 import appAvatar from '../../assets/app-avatar.png'
 import { useSettingsStore } from '../../stores/useSettingsStore'
+import { useWorkspaceTabsStore } from '../../stores/useWorkspaceTabsStore'
 
 export function TitleBar(): React.JSX.Element {
   const setCommandPaletteOpen = useSettingsStore((s) => s.setCommandPaletteOpen)
+  const navRailCollapsed = useWorkspaceTabsStore((s) => s.navRailCollapsed)
+  const toggleNavRail = useWorkspaceTabsStore((s) => s.toggleNavRail)
 
   return (
     <header
       className="app-drag h-10 shrink-0 flex items-center justify-between px-3 border-b select-none"
       style={{ backgroundColor: 'var(--header)', borderColor: 'var(--border)' }}
     >
-      <div className="flex items-center gap-2.5">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          data-nav-rail-toggle="true"
+          onClick={toggleNavRail}
+          className="app-no-drag p-1.5 rounded-md btn-ghost transition-colors cursor-pointer"
+          style={{ color: navRailCollapsed ? 'var(--accent)' : 'var(--muted)' }}
+          title={navRailCollapsed ? 'Hiện thanh điều hướng trái (Ctrl+Alt+B)' : 'Ẩn thanh điều hướng trái (Ctrl+Alt+B)'}
+          aria-label="Ẩn/hiện thanh điều hướng trái"
+        >
+          {navRailCollapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+        </button>
         <img
           src={appAvatar}
-          alt="AI Coding Tool"
+          alt="Multi-Agent Studio"
           className="w-6 h-6 rounded-md object-cover shadow-sm"
         />
         <span className="text-[13px] font-semibold tracking-tight" style={{ color: 'var(--text)' }}>
-          AI Coding Tool
+          Multi-Agent Studio
         </span>
         <span
           className="text-[10px] font-semibold px-1.5 py-0.5 rounded border"
@@ -27,7 +41,7 @@ export function TitleBar(): React.JSX.Element {
             borderColor: 'color-mix(in srgb, var(--accent) 30%, transparent)'
           }}
         >
-          Multi-Agent Studio
+          AI Workspace
         </span>
       </div>
 

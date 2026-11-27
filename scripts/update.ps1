@@ -2,7 +2,7 @@
 $RootDir = Split-Path -Parent $PSScriptRoot
 Set-Location $RootDir
 
-Write-Host "=== Cập nhật AI Coding Tool ===" -ForegroundColor Cyan
+Write-Host "=== Cập nhật Multi-Agent Studio ===" -ForegroundColor Cyan
 
 $dirty = git status --porcelain
 if ($dirty) {
@@ -29,5 +29,5 @@ npm run build
 if ($LASTEXITCODE -ne 0) { throw "npm run build thất bại." }
 
 Write-Host ""
-Write-Host "Cập nhật thành công! Dữ liệu phiên AI & cài đặt trong '%APPDATA%\AiCodingTool' được giữ nguyên 100%." -ForegroundColor Green
+Write-Host "Cập nhật thành công! Dữ liệu phiên AI & cài đặt trong '%APPDATA%\MultiAgentStudio' được giữ nguyên 100%." -ForegroundColor Green
 Write-Host "Hãy khởi động lại ứng dụng để sử dụng phiên bản mới." -ForegroundColor Cyan

@@ -24,6 +24,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   defaultMode: 'edit',
   claudeAuthMode: 'env',
   notifications: true,
+  autoCompactEnabled: true,
+  autoCompactThreshold: 80,
   cliOverrides: {}
 }
 
@@ -240,6 +242,12 @@ export class WorkspaceRepository {
     this.db.persist()
   }
 
+  private normalizeProvider(raw: unknown): ProviderId {
+    const p = String(raw ?? '').toLowerCase()
+    if (p === 'claude' || p === 'codex' || p === 'agy') return p
+    return 'agy'
+  }
+
   private mapSession(r: Record<string, unknown>, runningIds: Set<string>): AiSession {
     const id = String(r.id)
     let status: 'idle' | 'running' | 'error' = runningIds.has(id) ? 'running' : 'idle'
@@ -254,7 +262,7 @@ export class WorkspaceRepository {
       id,
       workspaceId: String(r.workspace_id),
       workspacePath: String(r.workspace_path),
-      provider: String(r.provider) as ProviderId,
+      provider: this.normalizeProvider(r.provider),
       providerSessionId: r.provider_session_id ? String(r.provider_session_id) : null,
       title: String(r.title),
       model: String(r.model ?? ''),
@@ -278,7 +286,7 @@ export class WorkspaceRepository {
     )
     return rows.map((r) => ({
       sessionId: String(r.session_id),
-      provider: String(r.provider) as ProviderId,
+      provider: this.normalizeProvider(r.provider),
       providerSessionId: r.provider_session_id ? String(r.provider_session_id) : null,
       lastSyncedTurnIndex: Number(r.last_synced_turn_index ?? 0),
       updatedAt: String(r.updated_at)
@@ -293,7 +301,7 @@ export class WorkspaceRepository {
     if (!row) return null
     return {
       sessionId: String(row.session_id),
-      provider: String(row.provider) as ProviderId,
+      provider: this.normalizeProvider(row.provider),
       providerSessionId: row.provider_session_id ? String(row.provider_session_id) : null,
       lastSyncedTurnIndex: Number(row.last_synced_turn_index ?? 0),
       updatedAt: String(row.updated_at)
@@ -332,6 +340,7 @@ export class WorkspaceRepository {
         pinnedNotes: [],
         keyFiles: [],
         activeSkillIds: [],
+        compactedUpToTurnIndex: 0,
         updatedAt: now
       }
     }
@@ -343,6 +352,7 @@ export class WorkspaceRepository {
       pinnedNotes: parseJson<string[]>(row.pinned_notes_json as string, []),
       keyFiles: parseJson<string[]>(row.key_files_json as string, []),
       activeSkillIds: parseJson<string[]>(row.active_skills_json as string, []),
+      compactedUpToTurnIndex: Number(row.compacted_up_to_turn_index ?? 0),
       updatedAt: String(row.updated_at)
     }
   }
@@ -359,8 +369,8 @@ export class WorkspaceRepository {
     }
     this.db.run(
       `INSERT OR REPLACE INTO session_memories (
-        session_id, goal, summary, decisions_json, pinned_notes_json, key_files_json, active_skills_json, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        session_id, goal, summary, decisions_json, pinned_notes_json, key_files_json, active_skills_json, compacted_up_to_turn_index, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         sessionId,
         next.goal,
@@ -369,11 +379,30 @@ export class WorkspaceRepository {
         JSON.stringify(next.pinnedNotes),
         JSON.stringify(next.keyFiles),
         JSON.stringify(next.activeSkillIds),
+        next.compactedUpToTurnIndex ?? 0,
         next.updatedAt
       ]
     )
     this.db.persist()
     return next
+  }
+
+  resetProviderStatesForCompact(sessionId: string, compactedUpToTurnIndex: number): ProviderSyncState[] {
+    const now = new Date().toISOString()
+    this.db.run(
+      'UPDATE ai_sessions SET provider_session_id = NULL, updated_at = ? WHERE id = ?',
+      [now, sessionId]
+    )
+    const providers: ProviderId[] = ['claude', 'codex', 'agy']
+    for (const p of providers) {
+      this.db.run(
+        `INSERT OR REPLACE INTO session_provider_states (session_id, provider, provider_session_id, last_synced_turn_index, updated_at)
+         VALUES (?, ?, NULL, ?, ?)`,
+        [sessionId, p, compactedUpToTurnIndex, now]
+      )
+    }
+    this.db.persist()
+    return this.listProviderStates(sessionId)
   }
 
   // ---------- Turns & Events ----------
@@ -382,11 +411,23 @@ export class WorkspaceRepository {
       'SELECT * FROM ai_turns WHERE session_id = ? ORDER BY turn_index ASC',
       [sessionId]
     )
-    return turnRows.map((r) => {
-      const turnId = String(r.id)
-      const events = this.listTurnEvents(turnId)
-      return this.mapTurn(r, events)
-    })
+    if (turnRows.length === 0) return []
+    // Một truy vấn cho toàn bộ sự kiện của phiên (thay vì 1 truy vấn / lượt), nhóm theo turn_id giữ nguyên thứ tự
+    const eventRows = this.db.queryAll<Record<string, unknown>>(
+      `SELECT e.* FROM ai_events e
+       JOIN ai_turns t ON t.id = e.turn_id
+       WHERE t.session_id = ?
+       ORDER BY e.seq ASC, e.id ASC`,
+      [sessionId]
+    )
+    const byTurn = new Map<string, StoredAgentEvent[]>()
+    for (const r of eventRows) {
+      const ev = this.mapEventRow(r)
+      const list = byTurn.get(ev.turnId)
+      if (list) list.push(ev)
+      else byTurn.set(ev.turnId, [ev])
+    }
+    return turnRows.map((r) => this.mapTurn(r, byTurn.get(String(r.id)) ?? []))
   }
 
   getTurn(turnId: string): AiTurn | null {
@@ -500,6 +541,17 @@ export class WorkspaceRepository {
     return { id, turnId, seq, event, createdAt: now }
   }
 
+  /** Lượt còn 'running' từ lần chạy trước (app tắt giữa chừng) sẽ không bao giờ kết thúc — đánh dấu 'stopped'. */
+  recoverInterruptedTurns(): number {
+    const row = this.db.queryOne<{ n: number }>("SELECT COUNT(*) as n FROM ai_turns WHERE status = 'running'")
+    const n = Number(row?.n ?? 0)
+    if (n > 0) {
+      this.db.run("UPDATE ai_turns SET status = 'stopped' WHERE status = 'running'")
+      this.db.persist()
+    }
+    return n
+  }
+
   clearTurnEvents(sessionId: string): void {
     const turns = this.db.queryAll<{ id: string }>('SELECT id FROM ai_turns WHERE session_id = ?', [sessionId])
     for (const t of turns) {
@@ -514,13 +566,17 @@ export class WorkspaceRepository {
       'SELECT * FROM ai_events WHERE turn_id = ? ORDER BY seq ASC, id ASC',
       [turnId]
     )
-    return rows.map((r) => ({
+    return rows.map((r) => this.mapEventRow(r))
+  }
+
+  private mapEventRow(r: Record<string, unknown>): StoredAgentEvent {
+    return {
       id: Number(r.id),
       turnId: String(r.turn_id),
       seq: Number(r.seq),
       event: parseJson<NormalizedAgentEvent>(String(r.payload_json), { type: 'text.delta', text: '' }),
       createdAt: String(r.created_at)
-    }))
+    }
   }
 
   private mapTurn(r: Record<string, unknown>, events: StoredAgentEvent[]): AiTurn {
@@ -528,7 +584,7 @@ export class WorkspaceRepository {
       id: String(r.id),
       sessionId: String(r.session_id),
       turnIndex: Number(r.turn_index),
-      provider: String(r.provider) as ProviderId,
+      provider: this.normalizeProvider(r.provider),
       model: String(r.model ?? ''),
       userPrompt: String(r.user_prompt),
       attachments: parseJson<AiAttachment[]>(String(r.attachments_json), []),
@@ -649,5 +705,123 @@ export class WorkspaceRepository {
         }))
         .reverse()
     }
+  }
+
+  getProviderWindowStats(): Record<
+    ProviderId,
+    {
+      todayTurns: number
+      todayTokens: number
+      weekTurns: number
+      weekTokens: number
+      weekCostUsd: number
+      fiveHourTurns: number
+      fiveHourTokens: number
+      fiveHourResetsAt: string | null
+    }
+  > {
+    const now = new Date()
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString()
+    const fiveHoursAgo = new Date(now.getTime() - 5 * 60 * 60 * 1000).toISOString()
+
+    const empty = (): {
+      todayTurns: number
+      todayTokens: number
+      weekTurns: number
+      weekTokens: number
+      weekCostUsd: number
+      fiveHourTurns: number
+      fiveHourTokens: number
+      fiveHourResetsAt: string | null
+    } => ({
+      todayTurns: 0,
+      todayTokens: 0,
+      weekTurns: 0,
+      weekTokens: 0,
+      weekCostUsd: 0,
+      fiveHourTurns: 0,
+      fiveHourTokens: 0,
+      fiveHourResetsAt: null
+    })
+
+    const result: Record<ProviderId, ReturnType<typeof empty>> = {
+      claude: empty(),
+      codex: empty(),
+      agy: empty()
+    }
+
+    const weekRows = this.db.queryAll<{
+      provider: string
+      turns: number
+      inp: number
+      outp: number
+      cost: number
+    }>(
+      `SELECT provider, COUNT(*) as turns,
+              COALESCE(SUM(input_tokens), 0) as inp,
+              COALESCE(SUM(output_tokens), 0) as outp,
+              COALESCE(SUM(cost_usd), 0) as cost
+       FROM ai_turns WHERE status != 'running' AND created_at >= ?
+       GROUP BY provider`,
+      [sevenDaysAgo]
+    )
+    for (const r of weekRows) {
+      const p = this.normalizeProvider(r.provider)
+      result[p].weekTurns += Number(r.turns ?? 0)
+      result[p].weekTokens += Number(r.inp ?? 0) + Number(r.outp ?? 0)
+      result[p].weekCostUsd += Number(r.cost ?? 0)
+    }
+
+    const todayRows = this.db.queryAll<{
+      provider: string
+      turns: number
+      inp: number
+      outp: number
+    }>(
+      `SELECT provider, COUNT(*) as turns,
+              COALESCE(SUM(input_tokens), 0) as inp,
+              COALESCE(SUM(output_tokens), 0) as outp
+       FROM ai_turns WHERE status != 'running' AND created_at >= ?
+       GROUP BY provider`,
+      [startOfToday]
+    )
+    for (const r of todayRows) {
+      const p = this.normalizeProvider(r.provider)
+      result[p].todayTurns += Number(r.turns ?? 0)
+      result[p].todayTokens += Number(r.inp ?? 0) + Number(r.outp ?? 0)
+    }
+
+    const fiveHourRows = this.db.queryAll<{
+      provider: string
+      turns: number
+      inp: number
+      outp: number
+      oldest_at: string | null
+    }>(
+      `SELECT provider, COUNT(*) as turns,
+              COALESCE(SUM(input_tokens), 0) as inp,
+              COALESCE(SUM(output_tokens), 0) as outp,
+              MIN(created_at) as oldest_at
+       FROM ai_turns WHERE status != 'running' AND created_at >= ?
+       GROUP BY provider`,
+      [fiveHoursAgo]
+    )
+    for (const r of fiveHourRows) {
+      const p = this.normalizeProvider(r.provider)
+      result[p].fiveHourTurns += Number(r.turns ?? 0)
+      result[p].fiveHourTokens += Number(r.inp ?? 0) + Number(r.outp ?? 0)
+      if (r.oldest_at) {
+        const candidateResetMs = new Date(String(r.oldest_at)).getTime() + 5 * 60 * 60 * 1000
+        if (Number.isFinite(candidateResetMs)) {
+          const prevMs = result[p].fiveHourResetsAt ? new Date(result[p].fiveHourResetsAt).getTime() : Infinity
+          if (candidateResetMs < prevMs) {
+            result[p].fiveHourResetsAt = new Date(candidateResetMs).toISOString()
+          }
+        }
+      }
+    }
+
+    return result
   }
 }

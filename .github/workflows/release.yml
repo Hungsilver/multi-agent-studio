@@ -47,6 +47,6 @@ jobs:
       - name: Upload Installer Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ai-coding-tool-windows-installer
-          path: release/**/AI-Coding-Tool-Setup-*.exe
+          name: multi-agent-studio-windows-installer
+          path: release/**/Multi-Agent-Studio-Setup-*.exe
           if-no-files-found: error

@@ -9,6 +9,7 @@ export interface AdapterBuildCommandInput {
   imagePaths: string[]
   extraDirs: string[]
   claudeAuthMode: 'env' | 'account'
+  workDir?: string
 }
 
 export interface AdapterCommandSpec {

@@ -1,5 +1,5 @@
-appId: com.hungsilver.aicodingtool
-productName: AI Coding Tool
+appId: com.hungsilver.multiagentstudio
+productName: Multi-Agent Studio
 directories:
   output: release/${version}
 files:
@@ -23,15 +23,15 @@ win:
       arch:
         - x64
   icon: resources/icon.ico
-  artifactName: AI-Coding-Tool-Setup-${version}.exe
+  artifactName: Multi-Agent-Studio-Setup-${version}.exe
 nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: AI Coding Tool
+  shortcutName: Multi-Agent Studio
 publish:
   provider: github
   owner: Hungsilver
-  repo: ai-coding-tool
+  repo: multi-agent-studio

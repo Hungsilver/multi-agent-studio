@@ -80,3 +80,60 @@ export interface CommitDetail {
   info: string
   files: Array<{ code: string; path: string; oldPath?: string }>
 }
+
+export interface MergeConflictFile {
+  filePath: string
+  oursContent: string
+  theirsContent: string
+  mergedContent: string
+}
+
+export interface MergeWorktreeResult {
+  status: 'merged' | 'conflict' | 'main-dirty'
+  message: string
+  repoRoot: string
+  sourceBranch: string
+  targetBranch: string
+  conflicts: MergeConflictFile[]
+  dirtyFiles?: string[]
+}
+
+export interface StashEntry {
+  ref: string
+  index: number
+  branch: string
+  message: string
+  date: string
+}
+
+export interface RepoOperationState {
+  state: 'none' | 'merge' | 'rebase' | 'cherry-pick' | 'revert'
+  headBranch: string
+  incomingRef?: string
+  conflictCount: number
+}
+
+export interface GitGraphQuery {
+  count?: number
+  branch?: string
+  search?: string
+  author?: string
+  filePath?: string
+  firstParent?: boolean
+}
+
+export type HunkAction = 'stage' | 'unstage' | 'discard'
+
+export type ResetMode = 'soft' | 'mixed' | 'hard'
+
+export interface GitMergeResult {
+  status: 'merged' | 'conflict' | 'up-to-date'
+  message: string
+  conflicts: MergeConflictFile[]
+}
+
+export interface GitActionResult {
+  ok: boolean
+  message: string
+  conflicts?: MergeConflictFile[]
+}

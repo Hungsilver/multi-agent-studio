@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, FileEdit, FolderSearch, Terminal, Wrench, CheckCircle2, XCircle, Bot } from 'lucide-react'
 import type { ToolCategory } from '@shared/types/ai'
+import { openLinkInInspector } from './MessageMarkdown'
 
 export interface ToolActivityItem {
   callId: string
@@ -9,6 +10,16 @@ export interface ToolActivityItem {
   summary: string
   ok?: boolean
   output?: string
+}
+
+function extractClickableFile(cat: ToolCategory, summary: string): string | null {
+  if (cat !== 'read' && cat !== 'edit') return null
+  const trimmed = summary.trim().replace(/^["'`]|["'`]$/g, '')
+  if (!trimmed || /\s{2,}/.test(trimmed)) return null
+  if (/[\\/.]/.test(trimmed) && !trimmed.includes('*')) {
+    return trimmed
+  }
+  return null
 }
 
 function CategoryIcon({ cat }: { cat: ToolCategory }): React.JSX.Element {
@@ -27,7 +38,13 @@ function CategoryIcon({ cat }: { cat: ToolCategory }): React.JSX.Element {
   }
 }
 
-export function ToolActivityGroup({ items }: { items: ToolActivityItem[] }): React.JSX.Element {
+export function ToolActivityGroup({
+  items,
+  workspacePath
+}: {
+  items: ToolActivityItem[]
+  workspacePath?: string
+}): React.JSX.Element {
   const [open, setOpen] = useState(false)
 
   const counts = items.reduce(
@@ -72,31 +89,46 @@ export function ToolActivityGroup({ items }: { items: ToolActivityItem[] }): Rea
 
       {open && (
         <div className="border-t divide-y" style={{ borderColor: 'var(--border)' }}>
-          {items.map((it, idx) => (
-            <div key={`${it.callId}-${idx}`} className="px-3 py-2 space-y-1" style={{ borderColor: 'var(--border)' }}>
-              <div className="flex items-center gap-2">
-                <CategoryIcon cat={it.category} />
-                <span className="font-mono text-[11.5px] font-semibold" style={{ color: 'var(--text)' }}>
-                  {it.name}
-                </span>
-                {it.summary && (
-                  <span className="font-mono text-[11px] truncate" style={{ color: 'var(--muted)' }}>
-                    {it.summary}
+          {items.map((it, idx) => {
+            const clickableFile = extractClickableFile(it.category, it.summary)
+            return (
+              <div key={`${it.callId}-${idx}`} className="px-3 py-2 space-y-1" style={{ borderColor: 'var(--border)' }}>
+                <div className="flex items-center gap-2">
+                  <CategoryIcon cat={it.category} />
+                  <span className="font-mono text-[11.5px] font-semibold" style={{ color: 'var(--text)' }}>
+                    {it.name}
                   </span>
+                  {clickableFile ? (
+                    <button
+                      type="button"
+                      onClick={() => openLinkInInspector(clickableFile, workspacePath)}
+                      className="font-mono text-[11px] truncate underline decoration-dotted hover:opacity-80 cursor-pointer text-left"
+                      style={{ color: 'var(--accent)' }}
+                      title={`Mở ${clickableFile} trong Side Panel`}
+                    >
+                      {it.summary}
+                    </button>
+                  ) : (
+                    it.summary && (
+                      <span className="font-mono text-[11px] truncate" style={{ color: 'var(--muted)' }}>
+                        {it.summary}
+                      </span>
+                    )
+                  )}
+                  {it.ok === true && <CheckCircle2 className="w-3.5 h-3.5 ml-auto shrink-0" style={{ color: 'var(--ok)' }} />}
+                  {it.ok === false && <XCircle className="w-3.5 h-3.5 ml-auto shrink-0" style={{ color: 'var(--err)' }} />}
+                </div>
+                {it.output && (
+                  <pre
+                    className="text-[11px] font-mono whitespace-pre-wrap break-all p-2 rounded max-h-40 overflow-y-auto"
+                    style={{ backgroundColor: 'var(--bg)', color: 'var(--muted)' }}
+                  >
+                    {it.output}
+                  </pre>
                 )}
-                {it.ok === true && <CheckCircle2 className="w-3.5 h-3.5 ml-auto shrink-0" style={{ color: 'var(--ok)' }} />}
-                {it.ok === false && <XCircle className="w-3.5 h-3.5 ml-auto shrink-0" style={{ color: 'var(--err)' }} />}
               </div>
-              {it.output && (
-                <pre
-                  className="text-[11px] font-mono whitespace-pre-wrap break-all p-2 rounded max-h-40 overflow-y-auto"
-                  style={{ backgroundColor: 'var(--bg)', color: 'var(--muted)' }}
-                >
-                  {it.output}
-                </pre>
-              )}
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

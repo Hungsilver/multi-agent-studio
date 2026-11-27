@@ -148,6 +148,9 @@ export async function restoreCheckpoint(dir: string, preTreeHash: string): Promi
 
 /**
  * Khôi phục duy nhất 1 file về trạng thái tại `preTreeHash`.
+ * - Xác thực tree trước; lỗi đọc Git KHÔNG được hiểu là "file vắng mặt" (tránh xóa nhầm file hiện tại).
+ * - Nội dung được Git ghi ra qua index tạm (`checkout-index`) nên giữ nguyên từng byte (kể cả file nhị phân)
+ *   và không chạm vào index thật.
  */
 export async function restoreFileFromCheckpoint(
   dir: string,
@@ -160,20 +163,43 @@ export async function restoreFileFromCheckpoint(
 
   const normalized = relPath.replace(/\\/g, '/')
   const full = resolveSafeRepoPath(root, normalized)
-  const existsInTree = await runGit(root, ['cat-file', '-e', `${preTreeHash}:${normalized}`])
 
-  if (existsInTree.code !== 0) {
-    // File chưa từng tồn tại ở preTreeHash -> xóa file
+  const kind = await runGit(root, ['cat-file', '-t', preTreeHash])
+  if (kind.code !== 0 || kind.stdout.trim() !== 'tree') {
+    throw new Error(`Không đọc được checkpoint ${preTreeHash.slice(0, 8)}: ${(kind.stderr || kind.stdout || 'không phải tree').trim()}`)
+  }
+
+  const entry = await runGit(root, ['--literal-pathspecs', 'ls-tree', '-z', preTreeHash, '--', normalized])
+  if (entry.code !== 0) {
+    throw new Error(`Không tra cứu được file trong checkpoint: ${(entry.stderr || entry.stdout).trim()}`)
+  }
+  const line = entry.stdout.split('\0').find(Boolean)
+
+  if (!line) {
+    // Tree hợp lệ và thật sự không có file này -> file được tạo sau checkpoint, xóa theo chức năng hiện tại
     if (fs.existsSync(full) && fs.statSync(full).isFile()) {
       fs.unlinkSync(full)
     }
     return
   }
 
-  const blob = await runGit(root, ['show', `${preTreeHash}:${normalized}`])
-  if (blob.code !== 0) throw new Error(blob.stderr || 'Không đọc được nội dung checkpoint')
-  fs.mkdirSync(path.dirname(full), { recursive: true })
-  fs.writeFileSync(full, blob.stdout, 'utf8')
+  const mode = line.split(' ')[0]
+  if (mode === '040000' || mode === '160000') {
+    throw new Error(`Đường dẫn là thư mục hoặc submodule trong checkpoint, không khôi phục theo từng file: ${normalized}`)
+  }
+
+  const tmpIndex = path.join(os.tmpdir(), `aict-restore-file-${randomUUID()}`)
+  try {
+    await runGitChecked(root, ['read-tree', preTreeHash], { env: { GIT_INDEX_FILE: tmpIndex } })
+    fs.mkdirSync(path.dirname(full), { recursive: true })
+    await runGitChecked(root, ['checkout-index', '-f', '--', normalized], { env: { GIT_INDEX_FILE: tmpIndex } })
+  } finally {
+    try {
+      fs.unlinkSync(tmpIndex)
+    } catch {
+      // ignore
+    }
+  }
 }
 
 export async function getTreeFileContent(root: string, treeHash: string, relPath: string): Promise<string> {

@@ -4,3 +4,6 @@ dist/
 release/
 .vite/
 *.log
+.ai-coding-worktrees/
+graphify-out/
+.env*

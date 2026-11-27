@@ -2,6 +2,18 @@ import type { AiTurn, ProviderId, ProviderSyncState, SessionMemory } from '@shar
 import type { SkillItem } from '@shared/types/governance'
 import type { RepoSummary } from '@shared/types/git'
 
+const HANDOFF_HISTORY_CHAR_BUDGET = 60_000
+
+/** Cắt giữa: giữ đầu + đuôi (kết luận thường nằm ở cuối câu trả lời). */
+function clipMiddle(text: string, max: number): string {
+  if (text.length <= max) return text
+  const head = Math.floor(max * 0.6)
+  const tail = max - head
+  return `${text.slice(0, head)}
+...(đã rút gọn)...
+${text.slice(text.length - tail)}`
+}
+
 export function summarizeTurnOutput(turn: AiTurn): { text: string; tools: string[] } {
   let text = ''
   const tools: string[] = []
@@ -52,7 +64,9 @@ export function buildHandoffPrompt(params: {
 } {
   const { targetProvider, memory, turns, targetSyncState, activeSkills, repoSummary, userPrompt } = params
   const lastSyncedIdx = targetSyncState?.lastSyncedTurnIndex ?? 0
-  const unsyncedTurns = turns.filter((t) => t.turnIndex > lastSyncedIdx && t.status !== 'running')
+  const compactedIdx = memory.compactedUpToTurnIndex ?? 0
+  const effectiveSyncedIdx = Math.max(lastSyncedIdx, compactedIdx)
+  const unsyncedTurns = turns.filter((t) => t.turnIndex > effectiveSyncedIdx && t.status !== 'running')
 
   // Nếu cùng provider và đã sync hết mọi turn, vẫn chèn active skills / pinned memory nếu là lượt đầu hoặc có thay đổi
   const hasMemoryContext =
@@ -61,7 +75,10 @@ export function buildHandoffPrompt(params: {
     memory.decisions.length > 0 ||
     memory.pinnedNotes.length > 0
 
-  const needsHandoff = unsyncedTurns.length > 0 || (!targetSyncState?.providerSessionId && (hasMemoryContext || activeSkills.length > 0))
+  const needsHandoff =
+    unsyncedTurns.length > 0 ||
+    (compactedIdx > 0 && hasMemoryContext) ||
+    (!targetSyncState?.providerSessionId && (hasMemoryContext || activeSkills.length > 0))
 
   if (!needsHandoff && activeSkills.length === 0) {
     return {
@@ -103,19 +120,28 @@ export function buildHandoffPrompt(params: {
 
     if (unsyncedTurns.length > 0) {
       const historyLines: string[] = [`### Lịch sử ${unsyncedTurns.length} lượt trao đổi chưa đồng bộ sang ${targetProvider}`]
-      for (const t of unsyncedTurns) {
+      // Duyệt từ lượt mới nhất về cũ: lượt gần đây giữ chi tiết, lượt cũ khi hết ngân sách chỉ còn 1 dòng
+      let budget = HANDOFF_HISTORY_CHAR_BUDGET
+      const blocks: string[] = []
+      for (let i = unsyncedTurns.length - 1; i >= 0; i--) {
+        const t = unsyncedTurns[i]
         const { text, tools } = summarizeTurnOutput(t)
-        const trimmedReply = text.length > 2600 ? `${text.slice(0, 2600)}\n...(đã rút gọn)...` : text
-        historyLines.push(`#### Lượt #${t.turnIndex} (trên ${t.provider})`)
-        historyLines.push(`**Người dùng:**\n${t.userPrompt}`)
-        if (tools.length > 0) {
-          historyLines.push(`**Thao tác đã chạy:** ${tools.slice(0, 12).join('; ')}`)
+        const lines = [`#### Lượt #${t.turnIndex} (trên ${t.provider})`]
+        const detailed = budget > 0
+        if (detailed) {
+          lines.push(`**Người dùng:**\n${clipMiddle(t.userPrompt, 3000)}`)
+          if (tools.length > 0) lines.push(`**Thao tác đã chạy:** ${tools.slice(0, 12).join('; ')}`)
+          if (text) lines.push(`**Trợ lý trả lời:**\n${clipMiddle(text, 2600)}`)
+        } else {
+          const head = (t.userPrompt.split(/\r?\n/)[0] || '').slice(0, 140)
+          const reply = (text.split(/\r?\n/).find((l) => l.trim()) || '').slice(0, 160)
+          lines.push(`- ${head}${reply ? ` → ${reply}` : ''} (đã rút gọn)`)
         }
-        if (trimmedReply) {
-          historyLines.push(`**Trợ lý trả lời:**\n${trimmedReply}`)
-        }
+        const block = lines.join('\n\n')
+        budget -= block.length
+        blocks.unshift(block)
       }
-      sections.push(historyLines.join('\n\n'))
+      sections.push([...historyLines, ...blocks].join('\n\n'))
     }
 
     sections.push('</session_context_handoff>')
@@ -138,11 +164,19 @@ export function buildHandoffPrompt(params: {
 }
 
 export function compactSessionMemoryFromTurns(memory: SessionMemory, turns: AiTurn[]): Omit<SessionMemory, 'sessionId' | 'updatedAt'> {
+  const prevCompactedIdx = memory.compactedUpToTurnIndex ?? 0
   const completed = turns.filter((t) => t.status === 'completed')
+  const newlyCompacted = completed.filter((t) => t.turnIndex > prevCompactedIdx)
   const keyFilesSet = new Set(memory.keyFiles)
+  const existingBullets = memory.summary
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .slice(-8)
   const turnBullets: string[] = []
 
-  for (const t of completed.slice(-12)) {
+  const sourceTurns = newlyCompacted.length > 0 ? newlyCompacted.slice(-16) : completed.slice(-12)
+  for (const t of sourceTurns) {
     for (const f of extractKeyFilesFromTurn(t)) keyFilesSet.add(f)
     const { text, tools } = summarizeTurnOutput(t)
     const firstLine = (t.userPrompt.split(/\r?\n/)[0] || '').slice(0, 90)
@@ -151,8 +185,10 @@ export function compactSessionMemoryFromTurns(memory: SessionMemory, turns: AiTu
     turnBullets.push(`#${t.turnIndex} (${t.provider}): ${firstLine}${toolNote}${replyHead ? ` → ${replyHead}` : ''}`)
   }
 
+  const mergedBullets = Array.from(new Set([...existingBullets, ...turnBullets])).slice(-24)
+  const latestTurnIndex = completed.length > 0 ? completed[completed.length - 1].turnIndex : prevCompactedIdx
   const goal = memory.goal.trim() || (completed[0]?.userPrompt.split(/\r?\n/)[0] ?? '').slice(0, 140)
-  const summary = turnBullets.join('\n')
+  const summary = mergedBullets.join('\n')
 
   return {
     goal,
@@ -160,6 +196,7 @@ export function compactSessionMemoryFromTurns(memory: SessionMemory, turns: AiTu
     decisions: memory.decisions,
     pinnedNotes: memory.pinnedNotes,
     keyFiles: Array.from(keyFilesSet).slice(0, 30),
-    activeSkillIds: memory.activeSkillIds
+    activeSkillIds: memory.activeSkillIds,
+    compactedUpToTurnIndex: latestTurnIndex
   }
 }

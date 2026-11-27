@@ -1,14 +1,18 @@
 import { create } from 'zustand'
 import { ACCENTS, THEMES } from '@shared/constants/themes'
-import type { CliStatus, ProviderId } from '@shared/types/ai'
+import type { CliStatus, OrchestratorConfig, ProviderId, ProviderQuotaStatus } from '@shared/types/ai'
 import type { AppSettings, WorkspaceRecord } from '@shared/types/workspace'
 
-export type ActiveNavTab = 'ai' | 'git' | 'governance' | 'usage' | 'settings'
+export type ActiveNavTab = 'ai' | 'apps' | 'git' | 'governance' | 'usage' | 'settings'
 
 interface SettingsState {
   settings: AppSettings
   workspaces: WorkspaceRecord[]
   cliStatuses: CliStatus[]
+  providerQuotas: ProviderQuotaStatus[]
+  quotasLoading: boolean
+  agyQuotaCap5h: number
+  orchestratorConfig: OrchestratorConfig
   activeTab: ActiveNavTab
   commandPaletteOpen: boolean
   toastMessage: { text: string; kind: 'info' | 'ok' | 'err' } | null
@@ -20,8 +24,44 @@ interface SettingsState {
   showToast: (text: string, kind?: 'info' | 'ok' | 'err') => void
   updateSettings: (patch: Partial<AppSettings>) => Promise<void>
   refreshCliStatuses: (force?: boolean) => Promise<void>
+  refreshProviderQuotas: (force?: boolean) => Promise<void>
+  setAgyQuotaCap5h: (cap: number) => void
+  updateOrchestratorConfig: (patch: Partial<OrchestratorConfig>) => void
   addWorkspace: (folderPath?: string) => Promise<WorkspaceRecord | null>
   removeWorkspace: (id: string) => Promise<void>
+}
+
+const AGY_CAP_STORAGE_KEY = 'aict:agy-quota-cap-5h'
+const ORCHESTRATOR_STORAGE_KEY = 'aict:orchestrator-config:v1'
+const DEFAULT_ORCHESTRATOR_CONFIG: OrchestratorConfig = {
+  enabled: false,
+  plannerProvider: 'agy',
+  plannerModel: 'gemini-4-neon-high',
+  executorProvider: 'agy',
+  executorModel: 'gemini-3.8-flash-high',
+  autoExecute: true,
+  verifyAfterExecute: false
+}
+
+function loadAgyCap(): number {
+  if (typeof window === 'undefined' || !window.localStorage) return 1_000_000
+  const raw = Number(window.localStorage.getItem(AGY_CAP_STORAGE_KEY))
+  return Number.isFinite(raw) && raw >= 100_000 ? raw : 1_000_000
+}
+
+function loadOrchestratorConfig(): OrchestratorConfig {
+  if (typeof window === 'undefined' || !window.localStorage) return { ...DEFAULT_ORCHESTRATOR_CONFIG }
+  try {
+    const raw = window.localStorage.getItem(ORCHESTRATOR_STORAGE_KEY)
+    if (!raw) return { ...DEFAULT_ORCHESTRATOR_CONFIG }
+    const parsed = JSON.parse(raw) as Partial<OrchestratorConfig>
+    return {
+      ...DEFAULT_ORCHESTRATOR_CONFIG,
+      ...parsed
+    }
+  } catch {
+    return { ...DEFAULT_ORCHESTRATOR_CONFIG }
+  }
 }
 
 export function applyThemeCss(settings: AppSettings): void {
@@ -55,10 +95,16 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     defaultMode: 'edit',
     claudeAuthMode: 'env',
     notifications: true,
+    autoCompactEnabled: true,
+    autoCompactThreshold: 80,
     cliOverrides: {}
   },
   workspaces: [],
   cliStatuses: [],
+  providerQuotas: [],
+  quotasLoading: false,
+  agyQuotaCap5h: loadAgyCap(),
+  orchestratorConfig: loadOrchestratorConfig(),
   activeTab: 'ai',
   commandPaletteOpen: false,
   toastMessage: null,
@@ -72,6 +118,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     ])
     applyThemeCss(settings)
     set({ settings, workspaces, cliStatuses, loaded: true })
+    void get().refreshProviderQuotas(false)
   },
 
   setActiveTab: (activeTab) => set({ activeTab }),
@@ -97,6 +144,39 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ cliStatuses })
   },
 
+  refreshProviderQuotas: async (force = false) => {
+    set({ quotasLoading: true })
+    try {
+      const cap = get().agyQuotaCap5h
+      const providerQuotas = await window.workspaceApi.getProviderQuotas(force, cap)
+      set({ providerQuotas })
+    } catch {
+      // ignore background quota refresh failure
+    } finally {
+      set({ quotasLoading: false })
+    }
+  },
+
+  setAgyQuotaCap5h: (cap) => {
+    const valid = Math.max(100_000, Math.round(cap))
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(AGY_CAP_STORAGE_KEY, String(valid))
+    }
+    set({ agyQuotaCap5h: valid })
+    void get().refreshProviderQuotas(true)
+  },
+
+  updateOrchestratorConfig: (patch) => {
+    const next: OrchestratorConfig = {
+      ...get().orchestratorConfig,
+      ...patch
+    }
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(ORCHESTRATOR_STORAGE_KEY, JSON.stringify(next))
+    }
+    set({ orchestratorConfig: next })
+  },
+
   addWorkspace: async (folderPath) => {
     const target = folderPath || (await window.workspaceApi.pickFolder())
     if (!target) return null
@@ -115,4 +195,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
 export function getModelsForProvider(statuses: CliStatus[], provider: ProviderId): string[] {
   return statuses.find((s) => s.provider === provider)?.models ?? []
+}
+
+export function getDefaultModelForProvider(
+  statuses: CliStatus[],
+  provider: ProviderId
+): { model: string | null; source: string | null } {
+  const hit = statuses.find((s) => s.provider === provider)
+  return {
+    model: hit?.defaultModel ?? null,
+    source: hit?.defaultModelSource ?? null
+  }
 }

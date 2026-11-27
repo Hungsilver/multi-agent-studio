@@ -1,4 +1,4 @@
-export type ProviderId = 'claude' | 'codex' | 'agy' | 'gemini'
+export type ProviderId = 'claude' | 'codex' | 'agy'
 
 export type PermissionMode = 'plan' | 'edit' | 'full'
 
@@ -32,8 +32,23 @@ export type NormalizedAgentEvent =
       ok: boolean
       output: string
     }
-  | { type: 'plan.proposed'; title: string; markdown: string }
+  | { type: 'plan.proposed'; title: string; markdown: string; executorProvider?: ProviderId; executorModel?: string }
   | { type: 'handoff'; fromProvider: ProviderId; toProvider: ProviderId; syncedTurnsCount: number; summary: string }
+  | {
+      type: 'orchestrator.phase'
+      phase: 'planning' | 'executing' | 'verifying' | 'awaiting-approval' | 'completed'
+      provider: ProviderId
+      model?: string
+      summary: string
+    }
+  | {
+      type: 'context.compacted'
+      trigger: 'manual' | 'auto'
+      compactedTurnsCount: number
+      beforeTokens: number
+      afterTokens: number
+      thresholdPercent?: number
+    }
   | {
       type: 'turn.complete'
       durationMs: number
@@ -47,6 +62,25 @@ export type NormalizedAgentEvent =
     }
   | { type: 'error'; message: string; hint?: string }
 
+export interface OrchestratorConfig {
+  enabled: boolean
+  plannerProvider: ProviderId
+  plannerModel: string
+  executorProvider: ProviderId
+  executorModel: string
+  autoExecute: boolean
+  verifyAfterExecute: boolean
+}
+
+export interface CompactContextResult {
+  memory: SessionMemory
+  providerStates: ProviderSyncState[]
+  compactedTurnsCount: number
+  beforeTokens: number
+  afterTokens: number
+  trigger: 'manual' | 'auto'
+}
+
 export interface SessionMemory {
   sessionId: string
   goal: string
@@ -55,6 +89,7 @@ export interface SessionMemory {
   pinnedNotes: string[]
   keyFiles: string[]
   activeSkillIds: string[]
+  compactedUpToTurnIndex: number
   updatedAt: string
 }
 
@@ -122,9 +157,39 @@ export interface CliStatus {
   resolvedVia: 'fnm' | 'registry-path' | 'standard-dir' | 'override' | 'not-found'
   version: string | null
   defaultModel: string | null
+  defaultModelSource?: string | null
   models: string[]
   installCommand: string
   notes?: string
+}
+
+export interface QuotaWindow {
+  label: string
+  usedPercent: number
+  resetsAt: string | null
+  windowMinutes?: number
+  severity?: 'normal' | 'warning' | 'critical'
+}
+
+export interface ProviderQuotaStatus {
+  provider: ProviderId
+  available: boolean
+  planLabel: string | null
+  source: 'live-api' | 'local-session' | 'local-db' | 'unavailable'
+  fetchedAt: string
+  windows: QuotaWindow[]
+  localStats: {
+    todayTurns: number
+    todayTokens: number
+    weekTurns: number
+    weekTokens: number
+    weekCostUsd: number
+    fiveHourTurns?: number
+    fiveHourTokens?: number
+    fiveHourResetsAt?: string | null
+  }
+  note?: string
+  error?: string
 }
 
 export interface UsageDailyPoint {

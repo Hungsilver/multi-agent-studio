@@ -1,24 +1,27 @@
-# AI Coding Tool
+# Multi-Agent Studio
 
-Ứng dụng desktop Windows chuyên biệt cho **AI Coding** đa tác nhân (Multi-Agent), tích hợp sẵn **Claude Code**, **OpenAI Codex**, **Antigravity CLI (`agy`)** và **Gemini CLI**.
+Ứng dụng desktop Windows toàn diện cho **Multi-Agent AI Coding**, **Git Studio**, **Quản lý Ứng dụng Dev (.NET / Vite / IIS)** và **Skills & Rules**, tích hợp sẵn **Claude Code** (`claude`), **OpenAI Codex** (`codex`) và **Antigravity CLI** (`agy`).
 
 ## Tính năng chính
 
-- **Đổi AI Tool giữ 100% ngữ cảnh**: Chuyển linh hoạt giữa Claude Code, Codex, AGY, Gemini ngay trong một phiên làm việc; tự động đồng bộ `Session Memory` (mục tiêu, quyết định kỹ thuật, lưu ý ghim, file trọng tâm) và các lượt chưa đồng bộ (`<session_context_handoff>`).
-- **Chạy song song & Git Worktree Isolation**: Chạy nhiều phiên AI đồng thời; hỗ trợ cô lập bằng Git Worktree (`.ai-coding-worktrees/`) để tránh xung đột file.
+- **Đổi AI Tool giữ 100% ngữ cảnh**: Chuyển linh hoạt giữa Claude Code, Codex, AGY ngay trong một phiên làm việc; tự động đồng bộ `Session Memory` (mục tiêu, quyết định kỹ thuật, lưu ý ghim, file trọng tâm) và các lượt chưa đồng bộ (`<session_context_handoff>`).
+- **Chế độ Orchestrator (Planner → Executor)**: Tự động điều phối tác nhân Lập kế hoạch → Thực thi → Kiểm duyệt lại giữa các AI model/tool khác nhau.
+- **Chạy song song & Git Worktree Isolation**: Chạy nhiều phiên AI đồng thời; hỗ trợ cô lập bằng Git Worktree (`.ai-coding-worktrees/`) để tránh xung đột file, kèm modal xử lý merge conflict trực quan.
 - **Turn Checkpoints & Monaco Diff**: Tự động chụp snapshot bằng `git write-tree` (không làm bẩn `git stash` hay `git log`) trước mỗi lượt AI; xem diff side-by-side bằng Monaco và hoàn tác 1 file hoặc cả lượt chỉ với 1 click.
+- **Git Studio (tương đương SourceTree)**: Cây commit đồ họa nhiều nhánh, Staging/Hunk/Line Diff, Commit/Amend, Branch CRUD, Merge/Rebase/Cherry-pick/Revert, Stash & Tag, Pull/Push/Fetch.
+- **Ứng dụng Dev (Apps Studio)**: Tự động quét & khởi chạy project `.NET 8`, `Vite`, Console Tool và quản lý site IIS; Start theo thứ tự (`tool → backend → bff → frontend`), xem CPU/RAM/HTTP health, Live Log theo thời gian thực, Auto-Restart khi sập, chia sẻ mạng LAN / Tailscale và DevTunnel.
 - **Quản lý Skills (`SKILL.md`), `AGENTS.md` & MCP**: Trình chỉnh sửa tích hợp cho `SKILL.md`, `AGENTS.md` / `CLAUDE.md` / `GEMINI.md`, đồng bộ 1-click và kiểm tra MCP Servers.
-- **Smart Composer & Embedded ConPTY Terminal**: Hỗ trợ `@file`, `@git-diff`, `/slash` templates/skills, dán ảnh `Ctrl+V`, duyệt `Plan → Execute` và terminal `xterm.js` mở interactive CLI.
+- **Smart Composer & Embedded ConPTY Terminal**: Hỗ trợ `@file`, `@git-diff`, `/slash` templates/skills, dán ảnh `Ctrl+V`, theo dõi context/compact, vòng đo hạn mức CLI và terminal `xterm.js` tương tác trực tiếp.
 
 ---
 
 ## Yêu cầu trên máy Windows khác
 
-1. **Windows 10 / 11 (x64)** và **Git for Windows** (dùng cho Turn Checkpoints, Diff, Worktree).
+1. **Windows 10 / 11 (x64)** và **Git for Windows** (dùng cho Turn Checkpoints, Git Studio, Worktree).
 2. **Ít nhất 1 AI CLI** đã cài đặt & đăng nhập sẵn trên máy:
    - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (sau đó chạy `claude` để đăng nhập)
    - **OpenAI Codex**: `npm install -g @openai/codex` (sau đó chạy `codex login`)
-   - **Antigravity CLI (`agy`)** hoặc **Gemini CLI**: `npm install -g @google/gemini-cli`
+   - **Antigravity CLI (`agy`)**: chạy trong PowerShell `irm https://antigravity.google/cli/install.ps1 | iex` (script cài `agy.exe` vào `%LOCALAPPDATA%\agy\bin`; kiểm tra bằng `agy --version`, lần đầu chạy `agy` để đăng nhập)
    > Lưu ý: Có thể mở tab **Cài đặt → Chẩn đoán AI CLI** trong app để kiểm tra trạng thái đường dẫn hoặc bấm cài/cập nhật từng CLI.
 
 ---
@@ -29,25 +32,25 @@
 
 Không cần cài Node.js hay build code trên máy đích:
 
-1. Đăng nhập tài khoản GitHub có quyền truy cập repository Private này (`Hungsilver/ai-coding-tool`) trên trình duyệt.
-2. Mở trang Releases: `https://github.com/Hungsilver/ai-coding-tool/releases`
-3. Tải file cài đặt **`AI-Coding-Tool-Setup-<version>.exe`** ở bản phát hành mới nhất.
-4. Chạy file `.exe` → Chọn thư mục cài đặt (mặc định Per-User trong AppData, không cần quyền Admin) → Mở **AI Coding Tool** từ Desktop / Start Menu.
+1. Đăng nhập tài khoản GitHub có quyền truy cập repository (`Hungsilver/multi-agent-studio`) trên trình duyệt.
+2. Mở trang Releases: `https://github.com/Hungsilver/multi-agent-studio/releases`
+3. Tải file cài đặt **`Multi-Agent-Studio-Setup-<version>.exe`** ở bản phát hành mới nhất.
+4. Chạy file `.exe` → Chọn thư mục cài đặt (mặc định Per-User trong AppData, không cần quyền Admin) → Mở **Multi-Agent Studio** từ Desktop / Start Menu.
 
 ### Cách 2 (Dành cho Dev / Chạy & sửa trực tiếp từ mã nguồn)
 
-Yêu cầu thêm: **Node.js >= 20** (và tài khoản Git/GitHub có quyền clone repo Private).
+Yêu cầu thêm: **Node.js >= 20** (và tài khoản Git/GitHub có quyền clone repo).
 
 ```powershell
-git clone https://github.com/Hungsilver/ai-coding-tool.git
-cd ai-coding-tool
+git clone https://github.com/Hungsilver/multi-agent-studio.git
+cd multi-agent-studio
 powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -CreateShortcut
 ```
 
 Script `scripts/install.ps1` sẽ tự động:
 - Chạy `npm install` và xử lý luôn lỗi npm 11 bỏ qua script cài `electron.exe`.
 - Build ứng dụng (`npm run build`).
-- Tạo shortcut **AI Coding Tool** trên Desktop (khi truyền `-CreateShortcut`).
+- Tạo shortcut **Multi-Agent Studio** trên Desktop (khi truyền `-CreateShortcut`).
 
 Để mở app ở chế độ dev:
 
@@ -59,12 +62,12 @@ npm run dev
 
 ## Cập nhật khi có thay đổi mới
 
-> **Bảo toàn dữ liệu 100%**: Toàn bộ lịch sử phiên AI, Session Memory, workspaces và cài đặt giao diện được lưu riêng tại `%APPDATA%\AiCodingTool\workspace.db`, không nằm trong thư mục cài đặt hay mã nguồn nên luôn được giữ nguyên khi cập nhật.
+> **Bảo toàn dữ liệu 100%**: Toàn bộ lịch sử phiên AI, Session Memory, workspaces, danh mục Apps và cài đặt giao diện được lưu riêng tại `%APPDATA%\MultiAgentStudio\` (`workspace.db`, `apps.json`), không nằm trong thư mục cài đặt hay mã nguồn nên luôn được giữ nguyên khi cập nhật.
 
 ### Nếu máy đó cài bằng file `.exe` (Cách 1)
 
 1. Trong app, vào **Cài đặt → Phiên bản & Cập nhật** → nhấn **Kiểm tra cập nhật** hoặc **Mở GitHub Releases**.
-2. Tải file **`AI-Coding-Tool-Setup-<version>.exe`** mới nhất từ GitHub Releases (trên trình duyệt đã đăng nhập GitHub vì repo đang ở chế độ Private).
+2. Tải file **`Multi-Agent-Studio-Setup-<version>.exe`** mới nhất từ GitHub Releases.
 3. Chạy đè file `.exe` mới (chỉ mất vài giây, dữ liệu giữ nguyên).
 
 ### Nếu máy đó chạy từ mã nguồn Git (Cách 2)
@@ -73,7 +76,7 @@ npm run dev
 - **Cách B (PowerShell 1 lệnh)**:
 
 ```powershell
-cd ai-coding-tool
+cd multi-agent-studio
 powershell -ExecutionPolicy Bypass -File .\scripts\update.ps1
 ```
 
@@ -101,7 +104,7 @@ Khi bạn có code mới muốn phát hành cho các máy khác:
    ```powershell
    npm run dist:win
    ```
-   File cài đặt sẽ nằm trong `release\<version>\AI-Coding-Tool-Setup-<version>.exe`.
+   File cài đặt sẽ nằm trong `release\<version>\Multi-Agent-Studio-Setup-<version>.exe`.
 
 ---
 

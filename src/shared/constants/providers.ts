@@ -57,6 +57,8 @@ export const PROVIDERS: Record<ProviderId, ProviderMetadata> = {
       'gemini-4-neon-high',
       'gemini-4-neon-medium',
       'gemini-4-carbon-high',
+      'gemini-pro-orchestrator-neon',
+      'gemini-pro-orchestrator',
       'gemini-3.8-flash-high',
       'claude-opus-5-5-high',
       'claude-sonnet-5-5-high'
@@ -64,26 +66,11 @@ export const PROVIDERS: Record<ProviderId, ProviderMetadata> = {
     supportsEffort: true,
     supportsImageFlag: false,
     description: 'Google Antigravity CLI (agy) — hỗ trợ đa model Gemini 4 / Claude / Reasoning effort & subagents.'
-  },
-  gemini: {
-    id: 'gemini',
-    name: 'Gemini CLI',
-    shortName: 'Gemini',
-    color: '#8B5CF6',
-    badgeBg: 'rgba(139, 92, 246, 0.14)',
-    executable: 'gemini',
-    packageName: '@google/gemini-cli',
-    installCommand: 'npm install -g @google/gemini-cli@latest',
-    presetModels: ['gemini-2.5-pro', 'gemini-2.5-flash'],
-    supportsEffort: false,
-    supportsImageFlag: false,
-    description: 'Google Gemini CLI — ngữ cảnh 1M token, đọc nhanh nhiều tài liệu.'
   }
 }
 
 export const PROVIDER_LIST: ProviderMetadata[] = [
   PROVIDERS.claude,
   PROVIDERS.codex,
-  PROVIDERS.agy,
-  PROVIDERS.gemini
+  PROVIDERS.agy
 ]

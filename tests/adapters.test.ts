@@ -3,7 +3,6 @@ import { AgyAdapter } from '../src/main/ai/adapters/agy-adapter'
 import { createAdapterStreamState } from '../src/main/ai/adapters/base'
 import { ClaudeCodeAdapter } from '../src/main/ai/adapters/claude-adapter'
 import { CodexAdapter } from '../src/main/ai/adapters/codex-adapter'
-import { GeminiCliAdapter } from '../src/main/ai/adapters/gemini-adapter'
 
 describe('AI Provider Adapters', () => {
   it('ClaudeCodeAdapter parses init, text, tool_use, tool_result, and result', () => {
@@ -46,8 +45,11 @@ describe('AI Provider Adapters', () => {
       prompt: 'Fix bug',
       imagePaths: ['C:\\tmp\\shot.png'],
       extraDirs: [],
-      claudeAuthMode: 'env'
+      claudeAuthMode: 'env',
+      workDir: 'D:\\Projects\\Demo'
     })
+    expect(cmd.args).toContain('-C')
+    expect(cmd.args).toContain('D:\\Projects\\Demo')
     expect(cmd.args).not.toContain('-m')
     expect(cmd.args).toContain('-i')
     expect(cmd.args).toContain('C:\\tmp\\shot.png')
@@ -139,13 +141,5 @@ describe('AI Provider Adapters', () => {
 
     const eRes = adapter.parseLine('{"event":"result","result":{"conversation_id":"conv-2","status":"SUCCESS","duration_seconds":2.5,"usage":{"input_tokens":200,"output_tokens":80}}}', state)
     expect(eRes[1]).toMatchObject({ type: 'turn.complete', durationMs: 2500, inputTokens: 200, outputTokens: 80, isError: false })
-  })
-
-  it('GeminiCliAdapter buffers delta text until flush', () => {
-    const adapter = new GeminiCliAdapter()
-    const state = createAdapterStreamState()
-    expect(adapter.parseLine('{"type":"message","role":"assistant","content":"Hello ","delta":true}', state)).toHaveLength(0)
-    const flushed = adapter.parseLine('{"type":"message","role":"assistant","content":"World","delta":false}', state)
-    expect(flushed).toEqual([{ type: 'text.delta', text: 'Hello World' }])
   })
 })

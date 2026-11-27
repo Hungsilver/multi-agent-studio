@@ -255,20 +255,34 @@ export async function stageFiles(dir: string, paths: string[], stage: boolean, a
   }
 }
 
-export async function commitChanges(dir: string, message: string): Promise<string> {
+export async function commitChanges(
+  dir: string,
+  message: string,
+  options: { amend?: boolean } = {}
+): Promise<string> {
   const root = await getRepoRoot(dir)
   if (!root) throw new Error('Không phải Git repository')
   const msg = message.trim()
   if (!msg) throw new Error('Commit message không được để trống')
 
-  const staged = (await runGitChecked(root, ['diff', '--cached', '--name-only'])).trim()
-  if (!staged) throw new Error('Chưa có file nào được stage')
+  if (!options.amend) {
+    const staged = (await runGitChecked(root, ['diff', '--cached', '--name-only'])).trim()
+    if (!staged) throw new Error('Chưa có file nào được stage')
+  }
 
-  const res = await runGit(root, ['commit', '-F', '-'], { stdin: `${msg}\n`, timeoutMs: 60_000 })
+  const args = options.amend ? ['commit', '--amend', '-F', '-'] : ['commit', '-F', '-']
+  const res = await runGit(root, args, { stdin: `${msg}\n`, timeoutMs: 60_000 })
   if (res.code !== 0) {
     throw new Error((res.stderr || res.stdout || 'Commit lỗi').trim())
   }
-  return res.stdout.split(/\r?\n/)[0] || 'Đã commit thành công'
+  return res.stdout.split(/\r?\n/)[0] || (options.amend ? 'Đã amend commit thành công' : 'Đã commit thành công')
+}
+
+export async function getLastCommitMessage(dir: string): Promise<string> {
+  const root = await getRepoRoot(dir)
+  if (!root) return ''
+  const res = await runGit(root, ['log', '-1', '--pretty=%B'])
+  return res.code === 0 ? res.stdout.trim() : ''
 }
 
 export async function revertWorkingFile(dir: string, change: FileChange): Promise<void> {
@@ -279,7 +293,7 @@ export async function revertWorkingFile(dir: string, change: FileChange): Promis
 
   if (!change.staged) {
     if (change.code === '?') {
-      if (fs.existsSync(full)) fs.unlinkSync(full)
+      if (fs.existsSync(full)) fs.rmSync(full, { recursive: true, force: true })
     } else {
       await runGitChecked(root, ['restore', '--worktree', '--', change.path])
     }
@@ -288,7 +302,7 @@ export async function revertWorkingFile(dir: string, change: FileChange): Promis
 
   if (change.code === 'A') {
     await runGitChecked(root, ['rm', '--cached', '-q', '-f', '--', change.path])
-    if (fs.existsSync(full)) fs.unlinkSync(full)
+    if (fs.existsSync(full)) fs.rmSync(full, { recursive: true, force: true })
   } else {
     await runGitChecked(root, ['restore', '--source=HEAD', '--staged', '--worktree', '--', change.path])
   }

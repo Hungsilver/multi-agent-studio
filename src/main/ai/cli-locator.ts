@@ -102,6 +102,118 @@ export function resolveEffectiveCodexModel(
   return { model: '' }
 }
 
+function readTailSync(filePath: string, maxBytes = 96_000): string {
+  const stat = fs.statSync(filePath)
+  if (stat.size <= maxBytes) return fs.readFileSync(filePath, 'utf8')
+  const fd = fs.openSync(filePath, 'r')
+  try {
+    const buf = Buffer.alloc(maxBytes)
+    fs.readSync(fd, buf, 0, maxBytes, stat.size - maxBytes)
+    return buf.toString('utf8')
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
+export function detectClaudeDefaultModel(
+  claudeHome = path.join(os.homedir(), '.claude')
+): { model: string; source: string } {
+  const settingsPath = path.join(claudeHome, 'settings.json')
+  if (fs.existsSync(settingsPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as { model?: unknown }
+      if (typeof parsed.model === 'string' && parsed.model.trim()) {
+        return { model: parsed.model.trim(), source: '~/.claude/settings.json' }
+      }
+    } catch {
+      // ignore invalid json
+    }
+  }
+
+  const envModel = (process.env.ANTHROPIC_MODEL || process.env.CLAUDE_MODEL || '').trim()
+  if (envModel) {
+    return { model: envModel, source: 'biến môi trường' }
+  }
+
+  // Fallback: kiểm tra model gần nhất mà Claude CLI sử dụng trong ~/.claude/projects
+  const projectsDir = path.join(claudeHome, 'projects')
+  if (fs.existsSync(projectsDir)) {
+    try {
+      const candidates: Array<{ file: string; mtime: number }> = []
+      for (const proj of fs.readdirSync(projectsDir, { withFileTypes: true })) {
+        if (!proj.isDirectory()) continue
+        const pDir = path.join(projectsDir, proj.name)
+        for (const f of fs.readdirSync(pDir, { withFileTypes: true })) {
+          if (f.isFile() && f.name.endsWith('.jsonl')) {
+            const full = path.join(pDir, f.name)
+            candidates.push({ file: full, mtime: fs.statSync(full).mtimeMs })
+          }
+        }
+      }
+      candidates.sort((a, b) => b.mtime - a.mtime)
+      for (const c of candidates.slice(0, 3)) {
+        const tail = readTailSync(c.file, 131_072)
+        const matches = Array.from(tail.matchAll(/"model"\s*:\s*"(claude-[^"]+)"/g))
+        const last = matches[matches.length - 1]
+        if (last?.[1]) {
+          return { model: last[1], source: 'mặc định Claude CLI' }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return { model: 'sonnet', source: 'mặc định CLI' }
+}
+
+export function detectAgyDefaultModel(
+  parsedModels: Array<{ id: string; label: string }>,
+  agyHome = path.join(os.homedir(), '.gemini', 'antigravity-cli')
+): { model: string | null; source: string | null } {
+  const settingsPath = path.join(agyHome, 'settings.json')
+  if (fs.existsSync(settingsPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as {
+        model?: unknown
+        defaultModel?: unknown
+      }
+      const m = typeof parsed.model === 'string' ? parsed.model : typeof parsed.defaultModel === 'string' ? parsed.defaultModel : ''
+      if (m.trim()) {
+        return { model: m.trim(), source: '~/.gemini/antigravity-cli/settings.json' }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const logPath = path.join(agyHome, 'cli.log')
+  if (fs.existsSync(logPath)) {
+    try {
+      const tail = readTailSync(logPath, 96_000)
+      const matches = Array.from(
+        tail.matchAll(/Propagating selected model override to backend:\s*label="([^"]+)"/g)
+      )
+      const lastLabel = matches[matches.length - 1]?.[1]
+      if (lastLabel) {
+        const hit = parsedModels.find(
+          (m) => m.label.toLowerCase() === lastLabel.toLowerCase() || m.id.toLowerCase() === lastLabel.toLowerCase()
+        )
+        if (hit) {
+          return { model: hit.id, source: 'mặc định AGY CLI' }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (parsedModels.length > 0) {
+    return { model: parsedModels[0].id, source: 'mặc định AGY CLI' }
+  }
+  return { model: null, source: null }
+}
+
 export function findCodexEntryInDir(dir: string): { nodeExe: string; codexJs: string } | null {
   const nodeExe = path.join(dir, 'node.exe')
   const codexJs = path.join(dir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
@@ -238,34 +350,6 @@ export function resolveCliCommand(
     return null
   }
 
-  // gemini
-  const fnm = resolveFnmInstallationDirs()
-  const gemDirs = [
-    ...(fnm.fnmRealDir ? [fnm.fnmRealDir] : []),
-    ...fnm.allNodeDirs,
-    path.join(appData, 'npm'),
-    path.join(home, '.local', 'bin'),
-    ...envInfo.persistentBinDirs
-  ]
-  for (const dir of gemDirs) {
-    const nodeExe = path.join(dir, 'node.exe')
-    const gemJs = path.join(dir, 'node_modules', '@google', 'gemini-cli', 'dist', 'index.js')
-    if (fs.existsSync(nodeExe) && fs.existsSync(gemJs)) {
-      return {
-        file: nodeExe,
-        argsPrefix: [gemJs],
-        resolvedVia: 'fnm',
-        executablePath: nodeExe,
-        entryScriptPath: gemJs
-      }
-    }
-  }
-  const gemExe = findExeInDirs(['gemini.exe', 'gemini.cmd'], gemDirs)
-  if (gemExe) {
-    return gemExe.toLowerCase().endsWith('.cmd')
-      ? { file: process.env.ComSpec || 'cmd.exe', argsPrefix: ['/d', '/s', '/c', gemExe], resolvedVia: 'registry-path', executablePath: gemExe }
-      : { file: gemExe, argsPrefix: [], resolvedVia: 'registry-path', executablePath: gemExe }
-  }
   return null
 }
 
@@ -279,7 +363,7 @@ export async function inspectAllClis(
   if (forceRefresh) resolveWindowsEnvironment(true)
 
   const env = getEnrichedEnv([], forceRefresh)
-  const providers: ProviderId[] = ['claude', 'codex', 'agy', 'gemini']
+  const providers: ProviderId[] = ['claude', 'codex', 'agy']
 
   const results = await Promise.all(
     providers.map(async (provider): Promise<CliStatus> => {
@@ -295,6 +379,7 @@ export async function inspectAllClis(
           resolvedVia: 'not-found',
           version: null,
           defaultModel: null,
+          defaultModelSource: null,
           models: [...meta.presetModels],
           installCommand: meta.installCommand
         }
@@ -305,16 +390,33 @@ export async function inspectAllClis(
 
       let models = [...meta.presetModels]
       let defaultModel: string | null = null
+      let defaultModelSource: string | null = null
       let notes: string | undefined
 
-      if (provider === 'codex') {
+      if (provider === 'claude') {
+        const detected = detectClaudeDefaultModel()
+        defaultModel = detected.model
+        defaultModelSource = detected.source
+        if (defaultModel && !models.includes(defaultModel)) {
+          models = [defaultModel, ...models]
+        }
+      } else if (provider === 'codex') {
         const cfgDefault = readCodexConfigDefaultModel()
         const cached = readCodexCachedModels()
         if (cached.length > 0) {
-          defaultModel = cfgDefault && cached.includes(cfgDefault) ? cfgDefault : cached[0]
+          if (cfgDefault && cached.includes(cfgDefault)) {
+            defaultModel = cfgDefault
+            defaultModelSource = '~/.codex/config.toml'
+          } else {
+            defaultModel = cached[0]
+            defaultModelSource = cfgDefault
+              ? `fallback từ ${cfgDefault} (models_cache.json)`
+              : 'models_cache.json'
+          }
           models = Array.from(new Set([...cached, ...meta.presetModels]))
         } else {
           defaultModel = cfgDefault
+          defaultModelSource = cfgDefault ? '~/.codex/config.toml' : null
           if (defaultModel && !models.includes(defaultModel)) {
             models = [defaultModel, ...models]
           }
@@ -324,17 +426,24 @@ export async function inspectAllClis(
         }
       } else if (provider === 'agy') {
         const modRes = await execCapture(resolved.file, [...resolved.argsPrefix, 'models'], 8000, env)
+        const parsedModelPairs: Array<{ id: string; label: string }> = []
         if (modRes.code === 0 && modRes.stdout) {
-          const parsedModels = modRes.stdout
-            .split(/\r?\n/)
-            .map((l) => l.trim())
-            .filter((l) => l && !l.startsWith('Fetching'))
-            .map((l) => l.split('\t')[0].trim())
-            .filter(Boolean)
-          if (parsedModels.length > 0) {
-            models = Array.from(new Set(parsedModels))
+          for (const rawLine of modRes.stdout.split(/\r?\n/)) {
+            const line = rawLine.trim()
+            if (!line || line.startsWith('Fetching')) continue
+            const [idRaw, labelRaw] = line.split('\t')
+            const id = idRaw?.trim()
+            if (id) {
+              parsedModelPairs.push({ id, label: (labelRaw ?? id).trim() })
+            }
+          }
+          if (parsedModelPairs.length > 0) {
+            models = Array.from(new Set(parsedModelPairs.map((m) => m.id)))
           }
         }
+        const detected = detectAgyDefaultModel(parsedModelPairs)
+        defaultModel = detected.model
+        defaultModelSource = detected.source
       }
 
       return {
@@ -346,6 +455,7 @@ export async function inspectAllClis(
         resolvedVia: resolved.resolvedVia,
         version,
         defaultModel,
+        defaultModelSource,
         models,
         installCommand: meta.installCommand,
         notes

@@ -25,17 +25,20 @@ export class CodexAdapter implements IAiProviderAdapter {
 
   buildHeadlessCommand(input: AdapterBuildCommandInput): AdapterCommandSpec {
     const args: string[] = ['exec']
-    if (input.providerSessionId) {
-      args.push('resume', input.providerSessionId)
+    if (input.workDir) {
+      args.push('-C', input.workDir)
     }
-    args.push('--json', '--skip-git-repo-check')
-
     if (input.mode === 'plan') {
       args.push('--sandbox', 'read-only')
     } else if (input.mode === 'edit') {
       args.push('--sandbox', 'workspace-write')
     } else {
       args.push('--dangerously-bypass-approvals-and-sandbox')
+    }
+    args.push('--skip-git-repo-check', '--json')
+
+    if (input.providerSessionId) {
+      args.push('resume', input.providerSessionId)
     }
 
     // Chỉ truyền -m khi người dùng chọn model cụ thể; để trống = tôn trọng model trong ~/.codex/config.toml (vd gpt-6.2-sol)
@@ -47,8 +50,10 @@ export class CodexAdapter implements IAiProviderAdapter {
       args.push('-i', img)
     }
 
-    for (const dir of input.extraDirs) {
-      args.push('--add-dir', dir)
+    if (!input.providerSessionId) {
+      for (const dir of input.extraDirs) {
+        args.push('--add-dir', dir)
+      }
     }
 
     args.push('-')
