@@ -7,6 +7,7 @@ import { AgentOrchestrator } from './ai/orchestrator'
 import { AppsManager } from './apps/apps-manager'
 import { cleanupOldAppLogs } from './apps/apps-store'
 import { PostgresWorkspace } from './database/postgres-workspace'
+import { ExternalDatabaseWorkspace } from './database/external-workspace'
 import { registerPostgresHandlers } from './ipc/postgres-handlers'
 import { registerIpcHandlers } from './ipc/register-handlers'
 import { WorkspaceDatabase } from './storage/database'
@@ -20,6 +21,7 @@ let orchestrator: AgentOrchestrator | null = null
 let ptyManager: PtyManager | null = null
 let appsManager: AppsManager | null = null
 const postgresWorkspace = new PostgresWorkspace()
+const externalDatabaseWorkspace = new ExternalDatabaseWorkspace()
 
 function resolveAppIcon(): string | undefined {
   const candidates = [
@@ -58,9 +60,13 @@ function createWindow(openDockedNote = false): void {
   mainWindow.on('closed', () => {
     mainWindow = null
     void postgresWorkspace.close()
+    void externalDatabaseWorkspace.close()
   })
   mainWindow.webContents.on('did-start-navigation', ({ isMainFrame, isSameDocument }) => {
-    if (isMainFrame && !isSameDocument) void postgresWorkspace.close()
+    if (isMainFrame && !isSameDocument) {
+      void postgresWorkspace.close()
+      void externalDatabaseWorkspace.close()
+    }
   })
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -204,7 +210,7 @@ if (!gotLock) {
       ptyManager,
       appsManager
     })
-    registerPostgresHandlers(() => mainWindow, postgresWorkspace)
+    registerPostgresHandlers(() => mainWindow, postgresWorkspace, externalDatabaseWorkspace)
 
     ipcMain.handle('note:desktop', async (event, action: unknown) => {
       if (event.sender === mainWindow?.webContents) {
@@ -247,6 +253,7 @@ if (!gotLock) {
 
   app.on('before-quit', async () => {
     void postgresWorkspace.close()
+    void externalDatabaseWorkspace.close()
     await orchestrator?.stopAll()
     await appsManager?.stopAllTunnels()
     ptyManager?.killAll()

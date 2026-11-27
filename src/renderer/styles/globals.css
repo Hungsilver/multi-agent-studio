@@ -59,6 +59,16 @@ body,
   background-color: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
+[data-database-workspace] {
+  accent-color: var(--accent);
+}
+
+[data-database-workspace] select,
+[data-database-workspace] select option {
+  color: var(--text);
+  background-color: var(--surface);
+}
+
 .bg-subtle {
   background-color: color-mix(in srgb, var(--text) 6%, transparent);
 }

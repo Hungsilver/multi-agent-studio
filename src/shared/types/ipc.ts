@@ -1,4 +1,13 @@
-import type { PostgresConnectionInfo, PostgresConnectionInput, PostgresQueryResponse, PostgresRelation } from './database'
+import type {
+  PostgresCellEdit, PostgresConnectionInfo, PostgresConnectionInput, PostgresEndpoint, PostgresEnvironment,
+  PostgresExportDestination, PostgresExportFormat, PostgresExportPage, PostgresObject, PostgresObjectKind, PostgresQueryResponse, PostgresRelation,
+  PostgresStructureChange, PostgresTableStructure
+} from './database'
+import type { PostgresPreviewOptions } from '../utils/postgres-preview'
+import type {
+  ExternalDatabaseConnection, ExternalDatabaseEndpoint, ExternalDatabaseEnvironment,
+  ExternalDatabaseInput, ExternalDatabaseResource, ExternalQueryResult
+} from './external-database'
 import type {
   AppsAlertPush,
   AppsBatchAction,
@@ -102,6 +111,8 @@ export interface PtyExitPush {
 export interface WorkspaceApi {
   connectPostgres: (input: PostgresConnectionInput, credential?: string, replaceId?: string) => Promise<PostgresConnectionInfo>
   testPostgres: (input: PostgresConnectionInput, credential?: string) => Promise<void>
+  checkPostgresEnvironment: (endpoint: PostgresEndpoint) => Promise<PostgresEnvironment>
+  installPostgresEnvironment: (endpoint: PostgresEndpoint) => Promise<void>
   sealPostgresPassword: (input: PostgresConnectionInput, credential?: string) => Promise<string | undefined>
   revealPostgresPassword: (input: PostgresConnectionInput, credential: string) => Promise<string>
   listPostgresDatabases: (id: string) => Promise<string[]>
@@ -109,6 +120,28 @@ export interface WorkspaceApi {
   listPostgresRelations: (id: string) => Promise<PostgresRelation[]>
   inspectPostgresRelation: (id: string, schema: string, relation: string, mode: 'data' | 'columns') => Promise<PostgresQueryResponse>
   queryPostgres: (id: string, sql: string) => Promise<PostgresQueryResponse>
+  listPostgresObjects: (id: string) => Promise<PostgresObject[]>
+  readPostgresObject: (id: string, kind: PostgresObjectKind, oid: string) => Promise<string>
+  dropPostgresObject: (id: string, object: PostgresObject) => Promise<void>
+  readPostgresTableStructure: (id: string, schema: string, table: string) => Promise<PostgresTableStructure>
+  applyPostgresStructure: (id: string, change: PostgresStructureChange) => Promise<void>
+  connectExternalDatabase: (input: ExternalDatabaseInput) => Promise<ExternalDatabaseConnection>
+  testExternalDatabase: (input: ExternalDatabaseInput) => Promise<void>
+  checkExternalDatabaseEnvironment: (endpoint: ExternalDatabaseEndpoint) => Promise<ExternalDatabaseEnvironment>
+  installExternalDatabaseEnvironment: (endpoint: ExternalDatabaseEndpoint) => Promise<void>
+  disconnectExternalDatabase: (id: string) => Promise<void>
+  listExternalDatabaseResources: (id: string) => Promise<ExternalDatabaseResource[]>
+  previewExternalDatabaseResource: (id: string, resource: ExternalDatabaseResource) => Promise<ExternalQueryResult[]>
+  queryExternalDatabase: (id: string, statement: string, resource?: ExternalDatabaseResource) => Promise<ExternalQueryResult[]>
+  browsePostgres: (id: string, schema: string, table: string, options: PostgresPreviewOptions) => Promise<PostgresQueryResponse>
+  readPostgresCell: (id: string, token: string | undefined, cell: string) => Promise<string>
+  savePostgresCell: (id: string, schema: string, table: string, edit: PostgresCellEdit) => Promise<void>
+  exportPostgres: (id: string, format: PostgresExportFormat, source: (PostgresExportPage | {
+    schema: string; table: string; options: PostgresPreviewOptions
+  }) & { includeHeaders?: boolean }, destination?: PostgresExportDestination) => Promise<boolean>
+  copyPostgresExport: (id: string, format: PostgresExportFormat, source: (PostgresExportPage | {
+    schema: string; table: string; options: PostgresPreviewOptions
+  }) & { includeHeaders?: boolean }) => Promise<void>
 
   // Window controls
   windowMinimize: () => Promise<void>
